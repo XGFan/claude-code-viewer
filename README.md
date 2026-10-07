@@ -98,3 +98,9 @@ src-tauri/        Tauri 外壳：命令与事件、后台 worker、FSEvents 监�
 src/              React 前端：features/* 各功能模块，ipc/ 为 IPC 层（real / mock 双实现）
 e2e/              Playwright 用例
 ```
+
+## 许可证
+
+Copyright (C) 2026 XGFan
+
+本项目以 [GNU Affero General Public License v3.0 或更高版本](LICENSE)（AGPL-3.0-or-later）发布。你可以自由使用、修改和分发；分发修改版，或以网络服务形式向他人提供修改版时，须以同一许可证公开对应源码。
