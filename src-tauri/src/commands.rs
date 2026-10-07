@@ -58,8 +58,8 @@ pub async fn set_data_root(state: State<'_, AppState>, path: Option<String>) -> 
     }
     let settings = Settings { data_root: path };
     let engine = tauri::async_runtime::spawn_blocking(move || {
-        let engine = open_engine(&settings)?;
         settings::save(&settings)?;
+        let engine = open_engine(&settings)?;
         Ok::<_, CoreError>(engine)
     })
     .await

@@ -40,3 +40,17 @@ test("更改数据目录调用 API 并更新显示，恢复默认", async ({ pag
   await dialog.getByTestId("set-rebuild").click();
   await expect(dialog.getByTestId("set-index-status")).toContainText("已索引");
 });
+
+test("更改数据目录后清空已选 Session", async ({ page }) => {
+  await page.goto("/");
+  await page.getByTestId("session-row").first().click();
+  await expect(page.getByTestId("transcript")).toBeVisible();
+  await page.keyboard.press("Meta+,");
+  const dialog = page.getByRole("dialog");
+  await dialog.getByRole("tab", { name: "数据" }).click();
+  await dialog.getByTestId("set-root-input").fill("/tmp/fixture-root");
+  await dialog.getByTestId("set-root-apply").click();
+  await expect(dialog.getByTestId("set-root-path")).toHaveText("/tmp/fixture-root");
+  await page.keyboard.press("Escape");
+  await expect(page.getByTestId("transcript-empty")).toBeVisible();
+});

@@ -68,6 +68,9 @@ function DataTab() {
       void qc.invalidateQueries({ queryKey: queryKeys.sessions() });
       void qc.invalidateQueries({ queryKey: queryKeys.projects });
       void qc.invalidateQueries({ queryKey: queryKeys.diagnostics });
+      // The previous root's session is gone: drop the selection and everything cached for it.
+      useUi.getState().selectSession(null);
+      for (const key of ["transcript", "session", "stats"]) qc.removeQueries({ queryKey: [key] });
     },
     onError: (e) => setError(errText(e)),
   });
