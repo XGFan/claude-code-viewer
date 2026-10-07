@@ -5,6 +5,7 @@ test("统计面板渲染卡片与图表", async ({ page }) => {
   await page.getByTestId("nav-stats").click();
   const panel = page.getByTestId("stats");
   await expect(panel.getByRole("heading", { name: "统计" })).toBeVisible();
+  await expect(page.getByTestId("pane-sessions")).toBeHidden(); // stats spans the session list column
   await expect(page.getByTestId("stat-card")).toHaveCount(4);
   await expect(page.locator('[data-card="sessions"]')).toContainText("10");
   await expect(page.getByTestId("daily-chart").locator("canvas").first()).toBeVisible();

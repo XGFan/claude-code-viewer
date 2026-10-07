@@ -18,10 +18,12 @@ export default function App() {
   const sessionId = useUi((s) => s.sessionId);
   // The Subagent panel takes the session list's width so the conversation keeps a readable column.
   const panelOpen = useUi((s) => s.view === "sessions" && s.sessionId != null && s.panelStack.length > 0);
+  // Stats and diagnostics span the session list's column too (design board 4).
+  const hideList = panelOpen || view !== "sessions";
 
   return (
     <div className="grid h-full grid-rows-[1fr_28px]">
-      <div className={cn("grid min-h-0", panelOpen ? "grid-cols-[216px_0px_1fr]" : "grid-cols-[216px_300px_1fr]")}>
+      <div className={cn("grid min-h-0", hideList ? "grid-cols-[216px_0px_1fr]" : "grid-cols-[216px_300px_1fr]")}>
         <aside data-testid="pane-projects" className="flex min-h-0 flex-col border-r border-border bg-sidebar">
           <div data-tauri-drag-region className="h-[52px] shrink-0 pl-[78px]" />
           <div className="min-h-0 flex-1 overflow-y-auto">
@@ -32,8 +34,8 @@ export default function App() {
 
         <section
           data-testid="pane-sessions"
-          aria-hidden={panelOpen || undefined}
-          className={cn("flex min-h-0 flex-col border-r border-border bg-list", panelOpen && "invisible overflow-hidden border-r-0")}
+          aria-hidden={hideList || undefined}
+          className={cn("flex min-h-0 flex-col border-r border-border bg-list", hideList && "invisible overflow-hidden border-r-0")}
         >
           <SessionList />
         </section>
