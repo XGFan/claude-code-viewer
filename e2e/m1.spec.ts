@@ -107,3 +107,15 @@ test("斜杠命令只显示一个斜杠，命令名高亮", async ({ page }) => 
   const [cmdColor, argColor] = await name.evaluate((e) => [getComputedStyle(e).color, getComputedStyle(e.parentElement!).color]);
   expect(cmdColor).not.toBe(argColor);
 });
+
+test("Project 列表滚动时「全部 Session」固定不动", async ({ page }) => {
+  await page.setViewportSize({ width: 1400, height: 240 });
+  await page.goto("/");
+  const all = page.getByTestId("project-all");
+  const before = (await all.boundingBox())!.y;
+  const list = page.getByTestId("project-scroll");
+  await list.evaluate((e) => (e.scrollTop = e.scrollHeight));
+  await expect.poll(() => list.evaluate((e) => e.scrollTop)).toBeGreaterThan(0);
+  expect((await all.boundingBox())!.y).toBe(before);
+  await expect(all).toBeInViewport();
+});

@@ -17,6 +17,7 @@ export function useDark(): boolean {
 
 interface Props {
   option: ChartOption;
+  /** Minimum height; the chart grows to fill the remaining space of its flex parent. */
   height: number;
   label: string;
   testId?: string;
@@ -43,5 +44,5 @@ export function Chart({ option, height, label, testId, onPick }: Props) {
     chart.current?.setOption(option);
   }, [option]);
 
-  return <div ref={el} role="img" aria-label={label} data-testid={testId} style={{ height, width: "100%" }} />;
+  return <div ref={el} role="img" aria-label={label} data-testid={testId} className="min-h-0 w-full flex-1" style={{ minHeight: height }} />;
 }

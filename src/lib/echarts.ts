@@ -17,7 +17,12 @@ export interface ChartHandle {
 /** Tree-shaken chart bound to `el`: auto-resizes with the element, `dispose` releases everything. */
 export function createChart(el: HTMLElement): ChartHandle {
   const chart = echarts.init(el, undefined, { renderer: "canvas" });
-  const ro = new ResizeObserver(() => chart.resize());
+  // Resize on the next frame: resizing inside the observer callback re-triggers it ("ResizeObserver loop").
+  let frame = 0;
+  const ro = new ResizeObserver(() => {
+    cancelAnimationFrame(frame);
+    frame = requestAnimationFrame(() => chart.resize());
+  });
   ro.observe(el);
   return {
     setOption: (option) => chart.setOption(option, true),
@@ -26,6 +31,7 @@ export function createChart(el: HTMLElement): ChartHandle {
       chart.on("click", handler);
     },
     dispose: () => {
+      cancelAnimationFrame(frame);
       ro.disconnect();
       chart.dispose();
     },

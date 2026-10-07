@@ -58,3 +58,14 @@ test("下钻带上统计的时间范围", async ({ page }) => {
   await expect(page.getByTestId("drill-chip")).toBeVisible();
   await expect(review).toHaveCount(0);
 });
+
+test("统计页铺满对话区，上下没有空白", async ({ page }) => {
+  await page.setViewportSize({ width: 1400, height: 900 });
+  await page.goto("/");
+  await page.getByTestId("nav-stats").click();
+  await page.getByTestId("daily-chart").locator("canvas").first().waitFor();
+  const pane = (await page.getByTestId("pane-conversation").boundingBox())!;
+  const stats = (await page.getByTestId("stats").boundingBox())!;
+  expect(stats.y).toBe(pane.y); // no blank strip above the stats header
+  expect(stats.y + stats.height).toBeGreaterThanOrEqual(pane.y + pane.height - 1); // no blank area below
+});

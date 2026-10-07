@@ -69,7 +69,7 @@ function Segmented<T extends string>({
 
 function Card({ title, aside, className, children, testId }: { title: ReactNode; aside?: ReactNode; className?: string; children: ReactNode; testId?: string }) {
   return (
-    <section data-testid={testId} className={cn("flex min-w-0 flex-col gap-2 rounded-[10px] border border-border bg-ground px-3.5 py-3", className)}>
+    <section data-testid={testId} className={cn("flex min-h-0 min-w-0 flex-col gap-2 rounded-[10px] border border-border bg-ground px-3.5 py-3", className)}>
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
         <h2 className="m-0 flex-1 text-[13px] font-semibold">{title}</h2>
         {aside}
@@ -219,8 +219,8 @@ export function StatsPanel() {
   const agents = stats ? [...stats.subagents].sort((a, b) => b.runs - a.runs) : [];
 
   return (
-    <div data-testid="stats" className="@container flex min-w-0 flex-col gap-4 bg-list px-6 pb-6">
-      <header data-tauri-drag-region="deep" className="flex flex-wrap items-center gap-3 border-b border-border py-3">
+    <div data-testid="stats" className="@container flex min-h-full min-w-0 flex-col gap-4 bg-list px-6 pb-6">
+      <header data-tauri-drag-region="deep" className="flex min-h-[52px] shrink-0 flex-wrap items-center gap-3 border-b border-border">
         <h1 className="m-0 flex-1 text-[16px] font-semibold">统计</h1>
         <Segmented label="时间范围" value={rangeKey} options={RANGES.map((r) => ({ key: r.key, label: r.label }))} onChange={setRangeKey} />
         <ProjectFilter value={projectIds} onChange={setProjectIds} />
@@ -233,7 +233,7 @@ export function StatsPanel() {
       {stats && !empty && (
         <>
           <Overview stats={stats} rangeDays={rangeDays} />
-          <div className="grid grid-cols-1 gap-3 @3xl:grid-cols-3">
+          <div className="grid flex-1 grid-cols-1 gap-3 @3xl:grid-cols-3 @3xl:grid-rows-[1.3fr_1fr]">
             <Card
               className="@3xl:col-span-2"
               title="每日 token · 按模型"
@@ -330,7 +330,7 @@ export function StatsPanel() {
 
             <Card title="工具调用" aside={<span className="text-[11px] text-secondary">次数 · 失败率</span>}>
               {tools.length === 0 && <Empty />}
-              <div className="flex max-h-56 flex-col gap-1.5 overflow-auto">
+              <div className="flex max-h-56 flex-col gap-1.5 overflow-auto @3xl:max-h-none @3xl:min-h-0 @3xl:flex-1">
                 {tools.map((t) => {
                   const rate = t.calls ? (t.failures / t.calls) * 100 : 0;
                   const high = rate > 5;

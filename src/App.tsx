@@ -26,9 +26,7 @@ export default function App() {
       <div className={cn("grid min-h-0", hideList ? "grid-cols-[216px_0px_1fr]" : "grid-cols-[216px_300px_1fr]")}>
         <aside data-testid="pane-projects" className="flex min-h-0 flex-col border-r border-border bg-sidebar">
           <div data-tauri-drag-region="deep" className="h-[52px] shrink-0 pl-[78px]" />
-          <div className="min-h-0 flex-1 overflow-y-auto">
-            <ProjectList />
-          </div>
+          <ProjectList />
           <StatsEntry />
         </aside>
 
@@ -54,12 +52,9 @@ export default function App() {
             </>
           )}
           {view === "stats" && (
-            <>
-              <div data-tauri-drag-region="deep" className="h-[52px] shrink-0" />
-              <div className="min-h-0 flex-1 overflow-auto">
-                <StatsPanel />
-              </div>
-            </>
+            <div className="min-h-0 flex-1 overflow-auto bg-list">
+              <StatsPanel />
+            </div>
           )}
           {view === "diagnostics" && (
             <>

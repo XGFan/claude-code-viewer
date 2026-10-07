@@ -60,18 +60,21 @@ export function ProjectList() {
   const inSessions = view === "sessions";
 
   return (
-    <nav aria-label="Projects" className="flex flex-col px-2.5 pb-2">
-      <Item
-        testId="project-all"
-        selected={inSessions && projectIds.length === 0}
-        onClick={() => pick([])}
-        icon={<Layers size={15} strokeWidth={1.5} />}
-        count={total}
-      >
-        全部 Session
-      </Item>
-      <div className="px-2 pt-4 pb-1.5 text-[11px] font-semibold tracking-[0.02em] text-secondary">PROJECTS · 按最近活跃</div>
-      <div className="flex flex-col gap-px">
+    <nav aria-label="Projects" className="flex min-h-0 flex-1 flex-col">
+      {/* "全部 Session" and the heading stay put; only the project list scrolls. */}
+      <div className="shrink-0 px-2.5">
+        <Item
+          testId="project-all"
+          selected={inSessions && projectIds.length === 0}
+          onClick={() => pick([])}
+          icon={<Layers size={15} strokeWidth={1.5} />}
+          count={total}
+        >
+          全部 Session
+        </Item>
+        <div className="px-2 pt-4 pb-1.5 text-[11px] font-semibold tracking-[0.02em] text-secondary">PROJECTS · 按最近活跃</div>
+      </div>
+      <div data-testid="project-scroll" className="flex min-h-0 flex-1 flex-col gap-px overflow-y-auto px-2.5 pb-2">
         {projects.map((p) => (
           <Item
             key={p.id}
