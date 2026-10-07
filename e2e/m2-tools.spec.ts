@@ -8,6 +8,23 @@ async function openRich(page: Page) {
   await expect(page.getByTestId("header").getByRole("heading", { name: RICH_TITLE })).toBeVisible();
 }
 
+/** Scrolls `scroller` by `dy` and resolves after the scroll event (and the virtualizer's re-render); false at the end. */
+const scrollBy = (scroller: Locator, dy: number) =>
+  scroller.evaluate(
+    (e, dy) =>
+      new Promise<boolean>((done) => {
+        const onScroll = () => requestAnimationFrame(() => done(true));
+        e.addEventListener("scroll", onScroll, { once: true });
+        const before = e.scrollTop;
+        e.scrollTop = before + dy;
+        if (e.scrollTop === before) {
+          e.removeEventListener("scroll", onScroll);
+          done(false);
+        }
+      }),
+    dy,
+  );
+
 /** Scrolls the virtualized transcript from the top, opening collapsed tool groups, until `target` is rendered. */
 async function reveal(page: Page, target: Locator) {
   const transcript = page.getByTestId("transcript");
@@ -25,9 +42,11 @@ async function reveal(page: Page, target: Locator) {
   );
   for (let i = 0; i < 200 && (await target.count()) === 0; i++) {
     const closed = transcript.locator('[data-testid="tool-group"]:not([data-open]) > button');
-    if ((await closed.count()) > 0) await closed.first().click();
-    else await transcript.evaluate((e) => (e.scrollTop += 400));
-    await page.waitForTimeout(30);
+    if ((await closed.count()) > 0) {
+      const button = (await closed.first().elementHandle())!;
+      await button.click();
+      await expect.poll(() => button.getAttribute("aria-expanded")).toBe("true");
+    } else if (!(await scrollBy(transcript, 400))) break;
   }
   await target.first().scrollIntoViewIfNeeded();
 }
@@ -67,6 +86,17 @@ test("持久化输出可点击加载完整内容", async ({ page }) => {
   await expect(bash).toContainText("412 passed");
   await expect(bash).toContainText("中间");
   await expect(bash.getByRole("button", { name: /加载完整输出/ })).toHaveCount(0);
+});
+
+test("复制 Bash 命令", async ({ page }) => {
+  await openRich(page);
+  const bash = page.locator('[data-tool="Bash"]').filter({ hasText: "cargo test --workspace" });
+  await reveal(page, bash);
+  await bash.getByRole("button").first().click();
+  await bash.hover();
+  await bash.getByRole("button", { name: "复制命令" }).click();
+  const calls = await page.evaluate(() => window.__cvCalls ?? []);
+  expect(calls.at(-1)).toEqual({ method: "copyText", args: ["cargo test --workspace"] });
 });
 
 test("图片缩略图渲染并可放大", async ({ page }) => {

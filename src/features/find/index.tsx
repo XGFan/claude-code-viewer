@@ -1,13 +1,14 @@
 import { ChevronDown, ChevronUp, X } from "lucide-react";
-import { useCallback, useEffect, useRef, useState } from "react";
-import type { FindMatch, TranscriptScope } from "@/ipc/bindings";
-import { api } from "@/ipc";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { FindMatch, FindRequest, TranscriptScope } from "@/ipc/bindings";
 import { useHotkey } from "@/lib/hotkeys";
+import { useFind } from "@/queries";
 import { useUi } from "@/state/ui";
 import { scrollToNode } from "../transcript/Transcript";
 import { requestFullOutput } from "../transcript/tools";
 
 const MAIN: TranscriptScope = { kind: "main" };
+const NO_MATCHES: FindMatch[] = [];
 const HIGHLIGHT = "cv-find";
 
 /** Scope of the pane the user last interacted with: the Subagent panel's innermost run, else the main transcript. */
@@ -26,7 +27,6 @@ export function FindBar() {
   const showHidden = useUi((s) => s.showHidden);
   const branchChoices = useUi((s) => s.branchChoices);
   const panelOpen = useUi((s) => s.panelStack.length > 0);
-  const [matches, setMatches] = useState<FindMatch[]>([]);
   // IME composition (e.g. pinyin) puts unconfirmed text in the input; find only confirmed text.
   const [composing, setComposing] = useState(false);
   const [settledQuery, setSettledQuery] = useState(query);
@@ -78,51 +78,54 @@ export function FindBar() {
     [activeScope],
   );
 
-  // Debounced search; a fresh result set jumps to its first match.
+  // Debounced search through react-query, so live appends (`useBackendEvents`) refresh the matches.
+  const [debounced, setDebounced] = useState(settledQuery);
+  useEffect(() => {
+    const t = window.setTimeout(() => setDebounced(settledQuery), 180);
+    return () => window.clearTimeout(t);
+  }, [settledQuery]);
+  const req = useMemo<FindRequest | null>(
+    () =>
+      show && sessionId && debounced.trim()
+        ? { sessionId, scope: activeScope, branchChoices, includeHidden: showHidden, query: debounced }
+        : null,
+    [show, sessionId, debounced, activeScope, branchChoices, showHidden],
+  );
+  const find = useFind(req);
+  // Results of the request for the confirmed, debounced query (not the previous request's placeholder).
+  const current = debounced === settledQuery && !find.isPlaceholderData ? find.data : undefined;
+  const matches = current?.matches ?? NO_MATCHES;
+  const error = debounced === settledQuery && req ? find.error : null;
+
+  // A fresh request jumps to its first match; a live refresh of the same request keeps the position.
   const goRef = useRef(go);
   goRef.current = go;
+  const jumped = useRef<FindRequest | null>(null);
   useEffect(() => {
-    if (!show || !sessionId) return;
-    const query = settledQuery;
-    if (!query.trim()) {
-      setMatches([]);
-      return;
-    }
-    let stale = false;
-    const t = window.setTimeout(() => {
-      api
-        .findInSession({ sessionId, scope: activeScope, branchChoices, includeHidden: showHidden, query })
-        .then((r) => {
-          if (stale) return;
-          setMatches(r.matches);
-          useUi.getState().setFindIndex(0);
-          goRef.current(r.matches, 0);
-        })
-        .catch(() => !stale && setMatches([]));
-    }, 180);
-    return () => {
-      stale = true;
-      window.clearTimeout(t);
-    };
-  }, [show, sessionId, settledQuery, activeScope, branchChoices, showHidden]);
+    if (!current || !req || jumped.current === req) return;
+    jumped.current = req;
+    useUi.getState().setFindIndex(0);
+    goRef.current(current.matches, 0);
+  }, [current, req]);
 
   // Closing (or leaving the session) drops the persistent highlight and the text marks.
   useEffect(() => {
     if (!show) {
-      setMatches([]);
+      jumped.current = null;
       setComposing(false);
       useUi.getState().setHighlight(null);
     }
   }, [show]);
   useTextMarks(show ? settledQuery : "");
 
+  const at = Math.min(index, matches.length - 1);
   const step = (d: 1 | -1) => {
     if (!matches.length) return;
-    go(matches, (index + d + matches.length) % matches.length);
+    go(matches, (at + d + matches.length) % matches.length);
   };
 
   if (!show) return null;
-  const none = settledQuery.trim() !== "" && matches.length === 0;
+  const errorText = error ? `查找失败：${typeof error === "object" && "message" in error ? String(error.message) : String(error)}` : "";
   return (
     <div
       data-testid="find"
@@ -158,8 +161,13 @@ export function FindBar() {
         className="h-7 min-w-0 max-w-80 flex-1 rounded-md border border-border bg-ground px-2.5 text-[13px] outline-none focus:border-accent"
       />
       <span data-testid="find-count" className="min-w-12 text-[12px] text-secondary tabular-nums">
-        {settledQuery.trim() === "" ? "" : none ? "无结果" : `${index + 1} / ${matches.length}`}
+        {!current || error ? "" : matches.length === 0 ? "无结果" : `${at + 1} / ${matches.length}`}
       </span>
+      {errorText && (
+        <span role="alert" data-testid="find-error" className="min-w-0 truncate text-[12px] text-error">
+          {errorText}
+        </span>
+      )}
       <button type="button" aria-label="上一个" disabled={!matches.length} onClick={() => step(-1)} className={iconBtn}>
         <ChevronUp size={14} strokeWidth={1.8} aria-hidden />
       </button>

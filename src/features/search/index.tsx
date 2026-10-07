@@ -1,4 +1,4 @@
-import { useQuery } from "@tanstack/react-query";
+import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { Command } from "cmdk";
 import { Check, ChevronDown, Search } from "lucide-react";
 import { Dialog as DialogPrimitive } from "radix-ui";
@@ -18,7 +18,7 @@ import type {
 import { formatRelative } from "@/lib/format";
 import { useHotkey } from "@/lib/hotkeys";
 import { cn } from "@/lib/cn";
-import { queryKeys, useIndexStatus, useProjects, useTranscript } from "@/queries";
+import { queryKeys, useIndexStatus, useProjects } from "@/queries";
 import { useUi } from "@/state/ui";
 
 const DAY_MS = 86_400_000;
@@ -106,10 +106,7 @@ function Snippet({ hit }: { hit: SearchHit }) {
 
 function HitRow({ group, hit, onOpen }: { group: SearchGroup; hit: SearchHit; onOpen: (sessionId: string, hit: SearchHit) => void }) {
   const sessionId = group.session.id;
-  const { data } = useTranscript(
-    hit.agentId ? { sessionId, scope: { kind: "main" }, branchChoices: [], includeHidden: false } : null,
-  );
-  const agentType = hit.agentId ? (data?.subagents.find((s) => s.agentId === hit.agentId)?.agentType ?? null) : null;
+  const agentType = hit.agentId ? hit.agentType : null;
   const role = hit.agentId
     ? (agentType ?? "Subagent")
     : hit.role === "user"
@@ -195,6 +192,7 @@ export function SearchOverlay() {
     queryFn: () => api.search(req),
     enabled: active,
     staleTime: 0,
+    placeholderData: keepPreviousData,
   });
 
   // Tool-output scan: restarted on any query/filter change, cancelled on close.
@@ -225,7 +223,8 @@ export function SearchOverlay() {
     };
   }, [active, withTools, req]);
 
-  const data = search.data;
+  // keepPreviousData also fills disabled queries; a blank query shows no results.
+  const data = active ? search.data : undefined;
   const groups = useMemo(() => mergeGroups(data?.groups ?? [], scan.groups), [data, scan.groups]);
   const totalHits = scan.groups.length ? groups.reduce((n, g) => n + g.hitCount, 0) : (data?.totalHits ?? 0);
   const totalSessions = scan.groups.length ? groups.length : (data?.totalSessions ?? 0);
@@ -332,7 +331,7 @@ export function SearchOverlay() {
                 )}
                 {data && !data.indexComplete && (
                   <span data-testid="search-incomplete">
-                    {textProgress ? `正在建立全文索引 · ${textProgress}，结果可能不完整` : "全文索引尚未完成，结果可能不完整"}
+                    {textProgress ? `全文索引未完成 · ${textProgress}` : "全文索引未完成"}
                   </span>
                 )}
                 {data?.mode && MODE_HINT[data.mode] && <span>{MODE_HINT[data.mode]}</span>}
@@ -350,7 +349,7 @@ export function SearchOverlay() {
                   <div className="font-semibold">没有找到 “{query}”</div>
                   <div className="text-[12px] text-text/80">
                     {[
-                      data && !data.indexComplete && "全文索引尚未完成",
+                      data && !data.indexComplete && "全文索引未完成",
                       !withTools && "本次搜索未包含工具输出",
                       days > 0 && `时间范围为${timeLabel}`,
                     ]

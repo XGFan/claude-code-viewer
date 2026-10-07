@@ -2,6 +2,7 @@ import { useUi } from "@/state/ui";
 import { Check, Circle, CircleDot, FileText, Globe, Pencil, Search, SquareTerminal, Wrench } from "lucide-react";
 import { useMemo, type ReactNode } from "react";
 
+import { CopyButton } from "@/components/ui/copy-button";
 import type { ToolCall } from "@/ipc/bindings";
 import { diffStrings, joinDiffs, rowsFromHunks, type DiffResult, type Hunk } from "@/lib/diff";
 import { langFromPath } from "@/lib/shiki";
@@ -66,6 +67,8 @@ export function BashView({ nodeId, call, startMs, ctx }: RenderProps) {
         </>
       }
     >
+      <div className="group/copy relative">
+        <CopyButton text={command} label="复制命令" className="absolute top-1 right-1.5 z-10 bg-terminal text-[#a1a1a6]" />
       {command.includes("\n") && (
         <pre className="m-0 overflow-auto bg-terminal px-3 pt-2.5 font-mono text-[12px] leading-[1.55] whitespace-pre-wrap break-words text-[#e4e4e6]">
           <span className="text-[#a1a1a6] select-none">$ </span>
@@ -80,6 +83,7 @@ export function BashView({ nodeId, call, startMs, ctx }: RenderProps) {
           <LoadBar out={out} dark />
         </div>
       )}
+      </div>
       <ImageRefs images={r?.images ?? []} ctx={ctx} />
     </Shell>
   );

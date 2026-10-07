@@ -337,6 +337,20 @@ fn subagent_hit_carries_agent_and_jumps_into_scope() {
         .find(|h| h.agent_id.as_deref() == Some("a11b19d522e5e3835"))
         .expect("hit inside the subagent file");
     assert!(hit.on_main_line);
+    assert_eq!(hit.agent_type.as_deref(), Some("codex:codex-rescue"));
+    // The tool-output scan labels subagent hits the same way.
+    let scanned = scan_hits(&scan(&env, "\"veniam do adipiscing tempor aliqua\"", false));
+    let (_, out) = scanned
+        .iter()
+        .find(|(_, h)| h.agent_id.as_deref() == Some("a11b19d522e5e3835"))
+        .expect("tool output inside the subagent file");
+    assert_eq!(out.agent_type.as_deref(), Some("codex:codex-rescue"));
+    assert!(
+        scanned
+            .iter()
+            .filter(|(_, h)| h.agent_id.is_none())
+            .all(|(_, h)| h.agent_type.is_none())
+    );
     let t = env
         .engine
         .resolve_jump(&JumpRequest {

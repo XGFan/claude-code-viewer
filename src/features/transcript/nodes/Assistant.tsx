@@ -4,8 +4,8 @@ import { CopyButton } from "@/components/ui/copy-button";
 import { Markdown } from "@/lib/markdown";
 import { useUi } from "@/state/ui";
 import { BranchSwitcher } from "../BranchSwitcher";
-import type { GroupItem, RoleInfo, Row, ToolCallBlock } from "../grouping";
-import { ToolCallView } from "../tools";
+import { type GroupItem, isGroupOpen, type RoleInfo, type Row, type ToolCallBlock } from "../grouping";
+import { ToolCallView, toolKey } from "../tools";
 import { clock } from "../util";
 import { Anchor } from "./Anchor";
 import { UnknownJson } from "./Misc";
@@ -77,14 +77,13 @@ function Tool({ node, call }: { node: Node; call: ToolCallBlock }) {
 /** "N 次工具调用 · 3 Bash · 2 Read"; collapsed unless it holds a failed call (or the user opened it). */
 function ToolGroup({ row }: { row: Extract<Row, { kind: "group" }> }) {
   const failed = row.failedCount > 0;
-  const open = useUi((s) => s.expanded[row.key] ?? failed);
-  const toggle = useUi((s) => s.toggleExpanded);
+  const open = useUi((s) => isGroupOpen(row, s.expanded, toolKey));
   return (
     <div data-testid="tool-group" data-open={open || undefined} className="flex w-full flex-col items-start gap-1.5">
       <button
         type="button"
         aria-expanded={open}
-        onClick={() => toggle(row.key, failed)}
+        onClick={() => useUi.getState().setExpanded(row.key, !open)}
         className="flex max-w-full items-center gap-2 rounded-lg border border-border bg-list px-2.5 py-1.5 text-[12px] text-text/80 hover:bg-selection/40"
       >
         {open ? <ChevronDown size={12} strokeWidth={1.8} aria-hidden /> : <ChevronRight size={12} strokeWidth={1.8} aria-hidden />}

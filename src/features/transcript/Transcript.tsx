@@ -11,14 +11,11 @@ import { clearScroll, type PendingScroll, scrollToNode, TranscriptContext, type 
 import { resetReading, setCurrentTurn, setTurns, useReading } from "./reading";
 import { toolKey } from "./tools";
 
-export { scrollToNode, type ScrollRequest } from "./nodes/scroll";
-
 /**
  * Scroll + highlight API for other features (⌘F / T4.2, outline, links):
  *
  * ```ts
- * const scrollTo = useScrollToNode();
- * scrollTo({ scope, nodeId, toolUseId, thinking: loc.kind === "thinking", flashMs: null });
+ * scrollToNode({ scope, nodeId, toolUseId, thinking: loc.kind === "thinking", flashMs: null });
  * ```
  *
  * The list rendering `scope` (main transcript, or the Subagent panel when `scope.kind === "subagent"` is the
@@ -26,9 +23,10 @@ export { scrollToNode, type ScrollRequest } from "./nodes/scroll";
  * tool group (`group:<firstNodeId>|<firstToolUseId>`), the call (`tool:<nodeId>|<toolUseId>`), thinking
  * (`thinking:<nodeId>`) or a compact summary (`compact:<nodeId>`) — scrolls the virtualizer so the target is
  * centered, then sets `useUi.highlight` (cleared after `flashMs`, default 2000; `null` keeps it).
- * A request for a scope that is not mounted yet waits for it. Plain function form: `scrollToNode(req)`.
+ * A request for a scope that is not mounted yet waits for it; one whose node is not in the data yet is retried on
+ * the next data update (dropped after two revisions or 5 s).
  */
-export const useScrollToNode = () => scrollToNode;
+export { scrollToNode, type ScrollRequest } from "./nodes/scroll";
 
 declare global {
   interface Window {
@@ -40,16 +38,29 @@ if (import.meta.env.DEV || import.meta.env.VITE_IPC === "mock") window.__cvStore
 
 const MAIN: TranscriptScope = { kind: "main" };
 const PIN_THRESHOLD = 48;
+/** A scroll request whose node is missing waits this long / this many revisions for it to arrive. */
+const SCROLL_RETRY_MS = 5000;
+const SCROLL_RETRY_REVISIONS = 2;
+/** Keys that scroll the focused list; they end the outline jump lock like a wheel or drag does. */
+const SCROLL_KEYS = new Set(["ArrowUp", "ArrowDown", "PageUp", "PageDown", "Home", "End", " "]);
 
 export function TranscriptView() {
   const sessionId = useUi((s) => s.sessionId);
-  const { data, isPlaceholderData } = useCurrentTranscript();
+  const { data, isPlaceholderData, error } = useCurrentTranscript();
   usePendingJump();
 
   if (!sessionId) {
     return (
       <div data-testid="transcript-empty" className="flex flex-1 items-center justify-center text-[13px] text-secondary">
         选择一个 Session 查看对话
+      </div>
+    );
+  }
+  if (error && data?.sessionId !== sessionId) {
+    const message = typeof error === "object" && "message" in error ? String(error.message) : String(error);
+    return (
+      <div data-testid="transcript-error" role="alert" className="flex flex-1 items-center justify-center px-6 text-[13px] text-error">
+        无法读取该 Session：{message}
       </div>
     );
   }
@@ -175,6 +186,12 @@ export function TranscriptList({ transcript, ready, scope, follow = false, agent
   const unlockTurn = useCallback(() => {
     if (isMain && useReading.getState().locked) useReading.setState({ locked: false });
   }, [isMain]);
+  const onKeyDown = useCallback(
+    (e: React.KeyboardEvent) => {
+      if (SCROLL_KEYS.has(e.key)) unlockTurn();
+    },
+    [unlockTurn],
+  );
 
   const onScroll = useCallback(() => {
     const el = scrollRef.current;
@@ -218,19 +235,35 @@ export function TranscriptList({ transcript, ready, scope, follow = false, agent
   // ---- scroll requests (pendingJump, find, card ↔ notification links) ----
   const pending = usePendingScroll(scope);
   const [target, setTarget] = useState<PendingScroll | null>(null);
+  // The pending request whose node was not found yet: revisions seen since, for the retry bound.
+  const miss = useRef<{ seq: number; revision: Transcript["revision"]; changes: number } | null>(null);
+  const revision = transcript.revision;
 
   useEffect(() => {
     if (!pending || !ready) return;
-    clearScroll(scope, pending.seq);
     const full = inheritedExpanded ? grouping : buildRows({ ...input, inheritedExpanded: true });
     const loc = locate(full, pending.nodeId, pending.toolUseId, { thinking: pending.thinking, toolKey });
-    if (!loc) return;
+    if (!loc) {
+      // The node may arrive with the next data update (live append, refetch): keep the request for a while.
+      const m = miss.current;
+      if (m?.seq !== pending.seq) {
+        miss.current = { seq: pending.seq, revision, changes: 0 };
+        const seqNo = pending.seq;
+        setTimeout(() => clearScroll(scope, seqNo), SCROLL_RETRY_MS);
+      } else if (m.revision !== revision) {
+        m.revision = revision;
+        if (++m.changes >= SCROLL_RETRY_REVISIONS) clearScroll(scope, pending.seq);
+      }
+      return;
+    }
+    miss.current = null;
+    clearScroll(scope, pending.seq);
     if (loc.expand.length) {
       useUi.setState((s) => ({ expanded: { ...s.expanded, ...Object.fromEntries(loc.expand.map((k) => [k, true])) } }));
     }
     pinned.current = false;
     setTarget(pending);
-  }, [pending, ready, scope, grouping, input, inheritedExpanded]);
+  }, [pending, ready, scope, grouping, input, inheritedExpanded, revision]);
 
   useEffect(() => {
     if (!target) return;
@@ -261,6 +294,7 @@ export function TranscriptList({ transcript, ready, scope, follow = false, agent
           onWheel={unlockTurn}
           onPointerDown={unlockTurn}
           onTouchStart={unlockTurn}
+          onKeyDown={onKeyDown}
           data-testid={testId}
           data-scope={scope.kind === "main" ? "main" : scope.agentId}
           className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-6"

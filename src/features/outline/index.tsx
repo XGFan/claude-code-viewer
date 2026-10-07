@@ -11,9 +11,11 @@ function goTo(t: TurnInfo) {
   scrollToNode({ scope: { kind: "main" }, nodeId: t.nodeId, flashMs: 1200 });
 }
 
-/** `j` / `k` turn navigation and ⌘↑ / ⌘↓ (top / bottom); inactive while typing in an input. */
+/** `j` / `k` turn navigation and ⌘↑ / ⌘↓ (top / bottom); inactive while typing in an input or with ⌘K / Settings open. */
 function useTurnKeys() {
   const step = (d: 1 | -1) => {
+    const ui = useUi.getState();
+    if (ui.searchOpen || ui.settingsOpen) return;
     const { turns, current } = useReading.getState();
     const t = d === 1 ? turns.find((x) => x.turn > current) : [...turns].reverse().find((x) => x.turn < current);
     if (t) goTo(t);

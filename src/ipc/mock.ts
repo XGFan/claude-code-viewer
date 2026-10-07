@@ -286,6 +286,7 @@ function searchGroups(req: SearchRequest, roles: SearchRole[]): SearchGroup[] {
     hits.push({
       nodeId: doc.nodeId,
       agentId: doc.agentId,
+      agentType: doc.agentId ? (richSubagents.find((a) => a.agentId === doc.agentId)?.agentType ?? null) : null,
       toolUseId: doc.toolUseId,
       role: doc.role,
       timestampMs: doc.timestampMs,

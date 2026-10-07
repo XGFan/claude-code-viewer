@@ -134,7 +134,7 @@ export type Drill =
 /**  `weekday` 0 = Monday. */
 { kind: "weekHour"; weekday: number; hour: number } | { kind: "tool"; name: string } | { kind: "agentType"; agentType: string } | { kind: "model"; model: string };
 
-export type ErrorCode = "notFound" | "invalidQuery" | "io" | "index" | "cancelled" | "notImplemented" | "internal";
+export type ErrorCode = "notFound" | "invalidQuery" | "io" | "index" | "cancelled" | "internal";
 
 export type FileFailure = {
 	path: string,
@@ -337,6 +337,8 @@ export type SearchHandle = {
 export type SearchHit = {
 	nodeId: string,
 	agentId: string | null,
+	/**  `agentType` of the Subagent Run holding the hit (from its `.meta.json`). */
+	agentType: string | null,
 	toolUseId: string | null,
 	role: SearchRole,
 	timestampMs: number | null,

@@ -184,8 +184,11 @@ pub fn run(
     let mut unmatched: Vec<i64> = Vec::new();
     {
         let mut st = conn.prepare(&format!(
-            "SELECT id, node_uuid, agent_id, tool_use_id, role, ts_ms, on_main_line, body
-             FROM msg_text WHERE id IN ({ids})"
+            "SELECT m.id, m.node_uuid, m.agent_id, m.tool_use_id, m.role, m.ts_ms, m.on_main_line, m.body,
+                a.agent_type
+             FROM msg_text m
+             LEFT JOIN subagents a ON a.session_id = m.session_id AND a.agent_id = m.agent_id
+             WHERE m.id IN ({ids})"
         ))?;
         let mut rows = st.query([])?;
         while let Some(row) = rows.next()? {
@@ -200,6 +203,7 @@ pub fn run(
                 SearchHit {
                     node_id: row.get(1)?,
                     agent_id: row.get(2)?,
+                    agent_type: row.get(8)?,
                     tool_use_id: row.get(3)?,
                     role: role_from_db(row.get(4)?),
                     timestamp_ms: row.get::<_, Option<i64>>(5)?.map(|v| v as f64),

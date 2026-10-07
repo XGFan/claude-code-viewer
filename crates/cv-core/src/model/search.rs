@@ -53,6 +53,8 @@ pub struct SnippetPart {
 pub struct SearchHit {
     pub node_id: NodeId,
     pub agent_id: Option<AgentId>,
+    /// `agentType` of the Subagent Run holding the hit (from its `.meta.json`).
+    pub agent_type: Option<String>,
     pub tool_use_id: Option<String>,
     pub role: SearchRole,
     #[specta(type = Option<Number>)]

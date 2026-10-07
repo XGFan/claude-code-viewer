@@ -12,13 +12,29 @@ async function openSession(page: Page, title: string) {
   return (await row.getAttribute("data-session-id"))!;
 }
 
+/** Scrolls `scroller` by `dy` and resolves after the scroll event (and the virtualizer's re-render); false at the end. */
+const scrollBy = (scroller: Locator, dy: number) =>
+  scroller.evaluate(
+    (e, dy) =>
+      new Promise<boolean>((done) => {
+        const onScroll = () => requestAnimationFrame(() => done(true));
+        e.addEventListener("scroll", onScroll, { once: true });
+        const before = e.scrollTop;
+        e.scrollTop = before + dy;
+        if (e.scrollTop === before) {
+          e.removeEventListener("scroll", onScroll);
+          done(false);
+        }
+      }),
+    dy,
+  );
+
 /** Scrolls a virtualized list upward from the bottom until `target` is rendered. */
 async function reveal(scroller: Locator, target: Locator) {
   await expect(scroller.locator("[data-row]").first()).toBeVisible();
-  await scroller.evaluate((e) => (e.scrollTop = e.scrollHeight));
+  await scrollBy(scroller, 1e7);
   for (let i = 0; i < 40 && (await target.count()) === 0; i++) {
-    await scroller.evaluate((e) => (e.scrollTop = Math.max(0, e.scrollTop - 300)));
-    await scroller.page().waitForTimeout(50);
+    if (!(await scrollBy(scroller, -300))) break;
   }
   await target.first().scrollIntoViewIfNeeded();
 }
@@ -210,4 +226,12 @@ test("Teammate 消息显示为可折叠卡片而非用户提问", async ({ page 
   await expect(body).toContainText("已在 docs/rate-limit.md 补充配置说明");
   await expect(body.locator("li")).toHaveCount(2);
   await expect(body).not.toContainText("This came from another Claude session");
+});
+
+test("当前 Session 被移除后对话区回到空状态", async ({ page }) => {
+  const sid = await openSession(page, RICH_TITLE);
+  await expect(page.getByTestId("transcript").locator("[data-row]").first()).toBeVisible();
+  await page.evaluate((id) => window.__cvMock!.emit("sessionsChanged", { changed: [], removed: [id], projectsChanged: false }), sid);
+  await expect(page.getByTestId("transcript-empty")).toBeVisible();
+  expect(await page.evaluate(() => window.__cvStore!.getState().sessionId)).toBeNull();
 });

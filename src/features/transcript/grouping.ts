@@ -82,7 +82,7 @@ export interface Grouping {
   rows: Row[];
   /** `nodeId` → first row showing it; `nodeId|toolUseId` → row showing that call. Collapsed inherited nodes map to the banner. */
   index: Map<string, number>;
-  /** `nodeId|toolUseId` → expansion key of the group holding that call. */
+  /** `nodeId|toolUseId` → expansion key of the group holding that call; `thinking:<nodeId>` → group holding that thinking. */
   groupOf: Map<string, string>;
   /** `toolUseId` → node id of the assistant message holding the call. */
   toolNode: Map<string, string>;
@@ -98,6 +98,7 @@ export const groupKey = (nodeId: string, toolUseId: string) => `group:${nodeId}|
 export const compactKey = (summaryNodeId: string) => `compact:${summaryNodeId}`;
 export const INHERITED_KEY = "inherited";
 export const anchorKey = (nodeId: string, toolUseId?: string | null) => (toolUseId ? `${nodeId}|${toolUseId}` : nodeId);
+const thinkingKey = (nodeId: string) => `thinking:${nodeId}`;
 
 const AGENT_TOOLS = new Set(["Agent", "Task"]);
 
@@ -169,7 +170,10 @@ export function buildRows(input: GroupingInput): Grouping {
           if (it.type === "call") {
             anchors.push([it.node.id, it.call.toolUseId]);
             groupOf.set(anchorKey(it.node.id, it.call.toolUseId), key);
-          } else anchors.push([it.node.id]);
+          } else {
+            anchors.push([it.node.id]);
+            groupOf.set(thinkingKey(it.node.id), key);
+          }
         }
         push(
           {
@@ -412,7 +416,11 @@ export function locate(
   if (grouping.inheritedIds.has(nodeId)) expand.push(INHERITED_KEY);
   const compact = grouping.compactKeyOf.get(nodeId);
   if (compact) expand.push(compact);
-  if (opts.thinking) expand.push(`thinking:${nodeId}`);
+  if (opts.thinking) {
+    const g = grouping.groupOf.get(thinkingKey(nodeId));
+    if (g) expand.push(g);
+    expand.push(thinkingKey(nodeId));
+  }
   if (toolUseId) {
     const g = grouping.groupOf.get(anchorKey(nodeId, toolUseId));
     if (g) expand.push(g);
@@ -422,6 +430,21 @@ export function locate(
 }
 
 const defaultToolKey = (nodeId: string, toolUseId: string) => `tool:${nodeId}|${toolUseId}`;
+
+/**
+ * Group open state: the user's choice, else open when it holds a failed call or an expanded call (a lone call row
+ * that becomes a group when the next call arrives during live follow keeps the user's expansion visible).
+ */
+export function isGroupOpen(
+  row: Extract<Row, { kind: "group" }>,
+  expanded: Record<string, boolean>,
+  toolKey: (nodeId: string, toolUseId: string) => string = defaultToolKey,
+): boolean {
+  return (
+    expanded[row.key] ??
+    (row.failedCount > 0 || row.items.some((it) => it.type === "call" && expanded[toolKey(it.node.id, it.call.toolUseId)] === true))
+  );
+}
 
 /** Row index for a node / call, preferring the exact call row. */
 export function rowIndexOf(grouping: Grouping, nodeId: string, toolUseId?: string | null): number | undefined {

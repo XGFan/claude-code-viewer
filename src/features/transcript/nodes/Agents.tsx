@@ -69,7 +69,7 @@ export function SubagentCard({ run, call, node }: { run: SubagentRun; call?: Too
           <span className="ml-3">{result}</span>
         </div>
       ) : (
-        run.isAsync && <div className="text-[12px] text-secondary">后台运行中，结果稍后以通知返回</div>
+        run.isAsync && <div className="text-[12px] text-secondary">后台运行 · 未收到结果</div>
       )}
       <div className="flex items-center gap-3 text-[12px]">
         {run.isAsync && call?.notificationNodeId && (

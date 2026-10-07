@@ -19,7 +19,7 @@ const sessionDefaults = {
   findQuery: "",
   findIndex: 0,
   highlight: null as Highlight | null,
-  /** Keys: `tool:<nodeId>|<toolUseId>`, `group:<firstNodeId>`, `thinking:<nodeId>`, `inherited`, `compact:<nodeId>`. */
+  /** Keys: `tool:<nodeId>|<toolUseId>`, `group:<firstNodeId>|<firstToolUseId>`, `thinking:<nodeId>`, `inherited`, `compact:<nodeId>`. */
   expanded: {} as Record<string, boolean>,
 };
 
@@ -50,10 +50,8 @@ interface UiState {
   setProjectIds: (ids: string[]) => void;
   /** Switches session (resetting per-session state); a no-op when the id is unchanged. */
   selectSession: (id: string | null) => void;
-  setScope: (scope: TranscriptScope) => void;
   /** Selects `headId` at `anchorKey`, replacing any earlier choice for that anchor. */
   setBranchChoice: (choice: BranchChoice) => void;
-  setBranchChoices: (choices: BranchChoice[]) => void;
   setShowHidden: (show: boolean) => void;
   setPanelStack: (stack: string[]) => void;
   pushPanel: (agentId: string) => void;
@@ -62,7 +60,6 @@ interface UiState {
   setFindOpen: (open: boolean) => void;
   setFindQuery: (query: string) => void;
   setFindIndex: (index: number) => void;
-  setPendingJump: (jump: JumpTarget | null) => void;
   /** Opens the target's session (if different) and queues the jump for the transcript to consume. */
   jumpTo: (target: JumpTarget) => void;
   setHighlight: (h: Highlight | null) => void;
@@ -89,10 +86,8 @@ export const useUi = create<UiState>()((set) => ({
   setView: (view) => set({ view }),
   setProjectIds: (projectIds) => set({ projectIds }),
   selectSession: (id) => set((s) => (s.sessionId === id ? s : { sessionId: id, ...sessionDefaults })),
-  setScope: (scope) => set({ scope }),
   setBranchChoice: (choice) =>
     set((s) => ({ branchChoices: [...s.branchChoices.filter((c) => c.anchorKey !== choice.anchorKey), choice] })),
-  setBranchChoices: (branchChoices) => set({ branchChoices }),
   setShowHidden: (showHidden) => set({ showHidden }),
   setPanelStack: (panelStack) => set({ panelStack }),
   pushPanel: (agentId) => set((s) => ({ panelStack: [...s.panelStack, agentId] })),
@@ -101,7 +96,6 @@ export const useUi = create<UiState>()((set) => ({
   setFindOpen: (findOpen) => set({ findOpen }),
   setFindQuery: (findQuery) => set({ findQuery, findIndex: 0 }),
   setFindIndex: (findIndex) => set({ findIndex }),
-  setPendingJump: (pendingJump) => set({ pendingJump }),
   jumpTo: (target) =>
     set((s) => ({
       view: "sessions",

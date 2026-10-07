@@ -97,6 +97,16 @@ pub fn run_tool_output_scan(
         cap,
         sessions: HashMap::new(),
     };
+    // (session id, agent id) → the agent's JSONL; its `.meta.json` names the agent type.
+    let agent_files: HashMap<(String, String), PathBuf> = targets
+        .iter()
+        .filter(|t| t.kind == ScanTargetKind::Jsonl)
+        .filter_map(|t| {
+            let a = t.agent_id.clone()?;
+            Some(((t.session_id.clone(), a), t.path.clone()))
+        })
+        .collect();
+    let agent_files = &agent_files;
     let mut done = 0u32;
     std::thread::scope(|scope| {
         let (tx, rx) = crossbeam_channel::unbounded::<(String, Vec<SearchHit>)>();
@@ -109,6 +119,17 @@ pub fn run_tool_output_scan(
                 } else {
                     let mut hits = scan_target(t, m, cancel);
                     hits.retain(|h| in_range(h.timestamp_ms));
+                    if let (Some(a), false) = (&t.agent_id, hits.is_empty()) {
+                        let agent_type = agent_files
+                            .get(&(t.session_id.clone(), a.clone()))
+                            .and_then(|p| {
+                                std::fs::read_to_string(p.with_extension("meta.json")).ok()
+                            })
+                            .and_then(|j| assemble::subagent::parse_meta(Some(&j)).agent_type);
+                        for h in &mut hits {
+                            h.agent_type = agent_type.clone();
+                        }
+                    }
                     hits
                 };
                 let _ = tx.send((t.session_id.clone(), hits));
@@ -304,6 +325,7 @@ fn scan_jsonl(t: &ScanTarget, m: &Matchers, cancel: &AtomicBool) -> Vec<SearchHi
             hits.push(SearchHit {
                 node_id: uuid.clone(),
                 agent_id: t.agent_id.clone(),
+                agent_type: None,
                 tool_use_id: b.tool_use_id.clone(),
                 role: SearchRole::ToolOutput,
                 timestamp_ms: e.timestamp_ms(),
@@ -345,6 +367,7 @@ fn scan_txt(t: &ScanTarget, m: &Matchers) -> Option<SearchHit> {
     Some(SearchHit {
         node_id: String::new(),
         agent_id: t.agent_id.clone(),
+        agent_type: None,
         tool_use_id: t.tool_use_id.clone(),
         role: SearchRole::ToolOutput,
         timestamp_ms: mtime,

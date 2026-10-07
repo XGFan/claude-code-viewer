@@ -88,15 +88,6 @@ export const useImage = (req: ImageRequest | null) =>
     staleTime: Infinity,
   });
 
-/** Disabled while the query is blank. */
-export const useSearch = (req: SearchRequest | null) =>
-  useQuery({
-    queryKey: req ? queryKeys.search(req) : ["search", null],
-    queryFn: () => api.search(req!),
-    enabled: req != null && req.query.trim() !== "",
-    placeholderData: keepPreviousData,
-  });
-
 export const useFind = (req: FindRequest | null) =>
   useQuery({
     queryKey: req ? queryKeys.find(req) : ["find", null],

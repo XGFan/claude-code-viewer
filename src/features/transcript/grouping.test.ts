@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { Node, SubagentRun } from "@/ipc/bindings";
 import { asstNode, call, otherNode, text, thinking, userNode } from "@/mocks/data/builders";
 import { richMain, richSubagents, richWorkflows } from "@/mocks/data/rich";
-import { buildRows, type GroupingInput, locate, rowIndexOf, type Row } from "./grouping";
+import { buildRows, type GroupingInput, isGroupOpen, locate, rowIndexOf, type Row } from "./grouping";
 
 const ok = (t = "ok") => ({ text: t });
 const input = (nodes: Node[], o: Partial<GroupingInput> = {}): GroupingInput => ({
@@ -63,6 +63,29 @@ describe("tool-call groups", () => {
     );
     expect(kinds(rows)).toEqual(["thinking", "group"]);
     expect(groups(rows)[0]!.items.map((i) => i.type)).toEqual(["call", "thinking", "call"]);
+  });
+
+  it("locate opens the group holding a thinking block", () => {
+    const g = buildRows(
+      input([
+        asstNode("a1", 1, [call("t1", "Bash", {}, ok())]),
+        asstNode("a2", 2, [thinking("hmm"), call("t2", "Read", {}, ok())]),
+      ]),
+    );
+    expect(locate(g, "a2", null, { thinking: true })?.expand).toEqual(["group:a1|t1", "thinking:a2"]);
+    expect(locate(g, "a1", null, { thinking: true })?.expand).toEqual(["thinking:a1"]);
+  });
+
+  it("a lone call that grows into a group keeps the user's expansion visible", () => {
+    const one = buildRows(input([asstNode("a1", 1, [call("t1", "Bash", {}, ok())])]));
+    expect(kinds(one.rows)).toEqual(["tool"]);
+    const expanded = { "tool:a1|t1": true };
+    const two = buildRows(input([asstNode("a1", 1, [call("t1", "Bash", {}, ok())]), asstNode("a2", 2, [call("t2", "Read", {}, ok())])]));
+    const [g] = groups(two.rows);
+    expect(isGroupOpen(g!, expanded)).toBe(true);
+    expect(isGroupOpen(g!, {})).toBe(false);
+    // An explicit choice on the group wins.
+    expect(isGroupOpen(g!, { ...expanded, [g!.key]: false })).toBe(false);
   });
 
   it("counts failed calls so the group opens by default", () => {
