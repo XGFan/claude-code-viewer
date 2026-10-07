@@ -510,3 +510,70 @@ fn transcript_follows_appends() {
     assert_eq!(t2.nodes.len(), t1.nodes.len() + 2);
     assert_eq!(t2.nodes.last().unwrap().id, "t-a4");
 }
+
+/// Rebuild rescans with progress and reports everything as changed (no second scan needed).
+#[test]
+fn rebuild_rescans_and_reports_changes() {
+    use cv_core::model::{IndexPhase, SessionQuery};
+    let env = scanned("subagents");
+    let phases = std::cell::RefCell::new(Vec::new());
+    let cs = env
+        .engine
+        .rebuild(&|s| phases.borrow_mut().push(s.phase))
+        .unwrap();
+    assert!(cs.projects_changed);
+    assert_eq!(cs.changed, vec![ids::SUBAGENTS.to_owned()]);
+    assert!(phases.borrow().contains(&IndexPhase::Scanning));
+    let sessions = env.engine.list_sessions(&SessionQuery::default()).unwrap();
+    assert_eq!(sessions.len(), 1);
+    assert_eq!(env.engine.scan_all(&|_| {}).unwrap(), ChangeSet::default());
+}
+
+/// A9: a sidecar rewritten while the app was closed is picked up by the first scan after start.
+#[test]
+fn sidecar_changed_while_closed_is_picked_up() {
+    let root = fixture_root("subagents");
+    let cache = tempfile::tempdir().unwrap();
+    let t0 = std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_000);
+    let set_mtime = |p: &Path, t| {
+        fs::File::options()
+            .write(true)
+            .open(p)
+            .unwrap()
+            .set_modified(t)
+            .unwrap();
+    };
+    let subagents = root
+        .path()
+        .join("projects")
+        .join(ids::SUBAGENTS_DIR)
+        .join(ids::SUBAGENTS)
+        .join("subagents");
+    for e in fs::read_dir(&subagents).unwrap() {
+        set_mtime(&e.unwrap().path(), t0);
+    }
+    let main = subagents.parent().unwrap().with_extension("jsonl");
+    set_mtime(&main, t0);
+    open(root.path(), cache.path()).scan_all(&|_| {}).unwrap();
+    // Restart without changes: nothing is recomputed.
+    let restarted = || open(root.path(), cache.path()).scan_all(&|_| {}).unwrap();
+    assert_eq!(restarted(), ChangeSet::default());
+
+    let meta = subagents.join("agent-a87b5e24025a157e4.meta.json");
+    fs::write(
+        &meta,
+        r#"{"agentType":"renamed","description":"quis ullamc","spawnDepth":1,"toolUseId":"toolu_01CZKpZhFGtnywQwyH8oUrsj"}"#,
+    )
+    .unwrap();
+    set_mtime(&meta, t0 + std::time::Duration::from_secs(60));
+    assert_eq!(restarted().changed, vec![ids::SUBAGENTS.to_owned()]);
+    let db = Connection::open(cache.path().join("index.sqlite")).unwrap();
+    let agent_type: String = db
+        .query_row(
+            "SELECT agent_type FROM subagents WHERE agent_id='a87b5e24025a157e4'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(agent_type, "renamed");
+}

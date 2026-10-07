@@ -131,18 +131,25 @@ fn locate(sk: &SessionSkeleton, r: &JumpRequest) -> CoreResult<Located> {
 /// sibling heads that the path resolved so far does not already follow.
 fn choices_for(sk: &SessionSkeleton, target: usize) -> Vec<BranchChoice> {
     let mut choices = Vec::new();
-    let mut path = sk.main_path.clone();
+    let mut on_path = vec![false; sk.nodes.len()];
+    let mark = |on_path: &mut [bool], path: &[usize]| {
+        on_path.fill(false);
+        for &i in path {
+            on_path[i] = true;
+        }
+    };
+    mark(&mut on_path, &sk.main_path);
     for v in tree::root_path(sk, target) {
         let n = &sk.nodes[v];
         let siblings = sk.heads_by_anchor.get(&sk.anchor[v]).map_or(0, Vec::len);
-        if !n.is_head || siblings < 2 || path.contains(&v) {
+        if !n.is_head || siblings < 2 || on_path[v] {
             continue;
         }
         choices.push(BranchChoice {
             anchor_key: sk.anchor_key(v),
             head_id: n.uuid.clone(),
         });
-        path = branch::resolve_path(sk, &choices);
+        mark(&mut on_path, &branch::resolve_path(sk, &choices));
     }
     choices
 }

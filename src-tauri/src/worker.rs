@@ -165,9 +165,7 @@ struct Worker {
 
 fn log_err(op: &str, e: &CoreError) {
     match e {
-        CoreError::NotImplemented(_) | CoreError::Cancelled => {
-            tracing::debug!("{op}: {e}");
-        }
+        CoreError::Cancelled => tracing::debug!("{op}: {e}"),
         _ => tracing::warn!("{op} failed: {e}"),
     }
 }
@@ -193,12 +191,8 @@ impl Worker {
                 // `Queue::next` absorbs backlog requests; kept for exhaustiveness.
                 Job::TextBacklog => self.queue.backlog = true,
                 Job::Rebuild => {
-                    if let Err(e) = engine.rebuild() {
-                        log_err("rebuild", &e);
-                        self.emit_error(&engine, &e);
-                    } else {
-                        self.full_scan(&engine);
-                    }
+                    let result = engine.rebuild(&self.progress());
+                    self.scan_done(&engine, "rebuild", result);
                 }
                 Job::PollLive => self.poll_live(&engine),
             }
@@ -252,14 +246,20 @@ impl Worker {
     }
 
     fn full_scan(&self, engine: &Engine) {
-        match engine.scan_all(&self.progress()) {
+        let result = engine.scan_all(&self.progress());
+        self.scan_done(engine, "scan_all", result);
+    }
+
+    /// Emits a full scan's (or rebuild's) changes and queues the text backlog.
+    fn scan_done(&self, engine: &Engine, op: &str, result: Result<ChangeSet, CoreError>) {
+        match result {
             Ok(cs) => {
                 self.emit_changes(cs);
                 self.emit_status(engine.index_status());
                 self.jobs.send(Job::TextBacklog);
             }
             Err(e) => {
-                log_err("scan_all", &e);
+                log_err(op, &e);
                 self.emit_error(engine, &e);
             }
         }

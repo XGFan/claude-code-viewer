@@ -20,9 +20,6 @@ pub enum CoreError {
     Json(#[from] serde_json::Error),
     #[error("操作已取消")]
     Cancelled,
-    /// Carries the name of the unimplemented operation.
-    #[error("功能尚未实现：{0}")]
-    NotImplemented(&'static str),
     #[error("{0}")]
     Internal(String),
 }
@@ -36,7 +33,6 @@ impl CoreError {
             CoreError::Index(_) => ErrorCode::Index,
             CoreError::Json(_) | CoreError::Internal(_) => ErrorCode::Internal,
             CoreError::Cancelled => ErrorCode::Cancelled,
-            CoreError::NotImplemented(_) => ErrorCode::NotImplemented,
         }
     }
 }
@@ -56,8 +52,8 @@ mod tests {
 
     #[test]
     fn converts_to_app_error_with_code() {
-        let e: AppError = CoreError::NotImplemented("search").into();
-        assert_eq!(e.code, ErrorCode::NotImplemented);
-        assert_eq!(e.message, "功能尚未实现：search");
+        let e: AppError = CoreError::NotFound("该 Session".into()).into();
+        assert_eq!(e.code, ErrorCode::NotFound);
+        assert_eq!(e.message, "未找到该 Session");
     }
 }

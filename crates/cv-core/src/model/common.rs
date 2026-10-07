@@ -87,7 +87,6 @@ pub enum ErrorCode {
     Io,
     Index,
     Cancelled,
-    NotImplemented,
     Internal,
 }
 

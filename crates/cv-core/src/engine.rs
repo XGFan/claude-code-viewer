@@ -145,7 +145,16 @@ impl Engine {
         cancel: &AtomicBool,
     ) -> CoreResult<()> {
         let _g = self.sync_lock.lock();
-        let mut main_set = |sid: &str| self.main_set_of(sid).unwrap_or_default();
+        let mut main_set = |sid: &str| match self.main_set_of(sid) {
+            Ok(set) => Some(set),
+            Err(e) => {
+                tracing::warn!(
+                    session = sid,
+                    "构建 Main Line 失败，暂不索引该 Session 的全文：{e}"
+                );
+                None
+            }
+        };
         // files/bytes done/total describe the text backlog while the phase is IndexingText.
         let progress = |c: text::TextProgress| {
             self.set_status(
@@ -168,16 +177,12 @@ impl Engine {
                 s.phase = match &res {
                     // Yielded to another job; the worker resumes the backlog afterwards.
                     Err(CoreError::Cancelled) if !ready => IndexPhase::IndexingText,
-                    Err(e) if !matches!(e, CoreError::NotImplemented(_) | CoreError::Cancelled) => {
-                        IndexPhase::Error
-                    }
+                    Err(e) if !matches!(e, CoreError::Cancelled) => IndexPhase::Error,
                     _ => IndexPhase::Idle,
                 };
                 s.text_ready = ready;
                 s.error = match &res {
-                    Err(e) if !matches!(e, CoreError::NotImplemented(_) | CoreError::Cancelled) => {
-                        Some(e.to_string())
-                    }
+                    Err(e) if !matches!(e, CoreError::Cancelled) => Some(e.to_string()),
                     _ => None,
                 };
             },
@@ -212,8 +217,9 @@ impl Engine {
         Ok(changed.then_some(LiveChanged { live: snapshot }))
     }
 
-    /// Drops and recreates the index, then runs a full scan.
-    pub fn rebuild(&self) -> CoreResult<()> {
+    /// Drops and recreates the index, then runs a full scan. Everything is new to the fresh
+    /// index, so the change set always reports `projects_changed`.
+    pub fn rebuild(&self, p: &dyn Fn(&IndexStatus)) -> CoreResult<ChangeSet> {
         {
             let _g = self.sync_lock.lock();
             self.index.reset()?;
@@ -221,8 +227,9 @@ impl Engine {
             *self.agents.lock() = Lru::new(AGENT_CACHE_CAP);
             *self.sidecar_state.lock() = None;
         }
-        self.scan_all(&|_| {})?;
-        Ok(())
+        let mut cs = self.scan_all(p)?;
+        cs.projects_changed = true;
+        Ok(cs)
     }
 
     pub fn list_projects(&self) -> CoreResult<Vec<ProjectSummary>> {
@@ -454,7 +461,7 @@ impl Engine {
         let p: &dyn Fn(&IndexStatus) = p.unwrap_or(&|_| {});
         let scan = scan::scan_root(&self.cfg.data_root);
         let db_files = self.index.read(reader::all_files)?;
-        let sidecar_dirty = self.diff_sidecars(&scan);
+        let (sidecar_dirty, sidecar_now) = self.diff_sidecars(&scan, &db_files);
         let (plans, removed) = plan_sync(&scan, db_files, &sidecar_dirty);
         let with_text = self.index.read(reader::sessions_with_text)?;
 
@@ -560,22 +567,28 @@ impl Engine {
             p,
         );
         result?;
+        *self.sidecar_state.lock() = Some(sidecar_now);
         cs.changed.sort();
         cs.changed.dedup();
         cs.removed.sort();
         Ok(cs)
     }
 
-    /// Sessions whose sidecar files changed since the previous sync (A9).
-    fn diff_sidecars(&self, scan: &ScanResult) -> HashSet<String> {
+    /// Sessions whose sidecar files changed since the previous sync (A9), and the sidecar state
+    /// to commit once this sync succeeds. Before the first sync, a sidecar newer than every
+    /// indexed file of its session counts as changed (it was written while the app was closed).
+    fn diff_sidecars(
+        &self,
+        scan: &ScanResult,
+        db: &[FileRecord],
+    ) -> (HashSet<String>, SidecarState) {
         let now: SidecarState = scan
             .sidecars
             .iter()
             .map(|s| (s.path.clone(), (s.size, s.mtime_ns, s.session_id.clone())))
             .collect();
         let mut dirty = HashSet::new();
-        let mut state = self.sidecar_state.lock();
-        if let Some(prev) = state.as_ref() {
+        if let Some(prev) = self.sidecar_state.lock().as_ref() {
             for (path, v) in &now {
                 if prev.get(path) != Some(v) {
                     dirty.insert(v.2.clone());
@@ -586,9 +599,19 @@ impl Engine {
                     dirty.insert(v.2.clone());
                 }
             }
+        } else {
+            let mut newest: HashMap<&str, i64> = HashMap::new();
+            for r in db {
+                let m = newest.entry(&r.session_id).or_insert(r.mtime_ns);
+                *m = (*m).max(r.mtime_ns);
+            }
+            for (_, mtime, sid) in now.values() {
+                if newest.get(sid.as_str()).is_some_and(|m| mtime > m) {
+                    dirty.insert(sid.clone());
+                }
+            }
         }
-        *state = Some(now);
-        dirty
+        (dirty, now)
     }
 
     /// A2: the Main Line set of a session, from its main files.
@@ -767,7 +790,7 @@ impl Engine {
         };
         let out = match &entry.body {
             Body::Assembled(a) => f(a, agent.as_ref().map(|(_, lf)| lf)),
-            Body::Files(_) => Err(CoreError::Internal("会话缓存状态异常".into())),
+            Body::Files(_) => Err(CoreError::Internal("Session 缓存状态异常".into())),
         };
         if let (Some(a), TranscriptScope::Subagent { agent_id }) = (agent, scope) {
             self.agents
@@ -1655,7 +1678,7 @@ mod tests {
         let res = engine.index.write(|conn| {
             text::index_pending(
                 conn,
-                &mut |_| HashSet::new(),
+                &mut |_| Some(HashSet::new()),
                 &|c| seen.lock().push(c),
                 &AtomicBool::new(true),
                 1,
@@ -1689,6 +1712,42 @@ mod tests {
         assert_eq!((last.files_done, last.files_total), (files, files));
         assert_eq!(last.bytes_done, last.bytes_total);
         assert_eq!(counts(&engine).1, files);
+    }
+
+    #[test]
+    fn text_backlog_leaves_a_session_pending_when_its_main_line_fails() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/subagents");
+        let tmp = tempfile::tempdir().unwrap();
+        let engine = Engine::open(EngineConfig {
+            data_root: root,
+            data_root_source: DataRootSource::Settings,
+            cache_dir: tmp.path().to_path_buf(),
+        })
+        .unwrap();
+        engine.scan_all(&|_| {}).unwrap();
+        let seen = Mutex::new(Vec::new());
+        engine
+            .index
+            .write(|conn| {
+                text::index_pending(
+                    conn,
+                    &mut |_| None,
+                    &|c| seen.lock().push(c),
+                    &AtomicBool::new(false),
+                    text::BATCH_BYTES,
+                )
+            })
+            .unwrap();
+        let (rows, ready) = engine
+            .index
+            .read(|c| {
+                let rows: u32 = c.query_row("SELECT count(*) FROM msg_text", [], |r| r.get(0))?;
+                Ok((rows, reader::text_ready(c)?))
+            })
+            .unwrap();
+        assert_eq!((rows, ready), (0, false));
+        let last = *seen.lock().last().unwrap();
+        assert_eq!((last.files_done, last.bytes_done), (0, 0));
     }
 
     #[test]

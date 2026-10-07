@@ -167,8 +167,9 @@ pub struct TextProgress {
 }
 
 /// Indexes `[text_offset, parsed_offset)` of every file with a backlog. `main_set` returns the
-/// Main Line uuid set of a session (A2) so `on_main_line` is set at insert time; `progress`
-/// receives the coverage after every transaction.
+/// Main Line uuid set of a session (A2) so `on_main_line` is set at insert time, or `None` when it
+/// cannot be built: that session's files in the batch are then skipped and stay pending.
+/// `progress` receives the coverage after every transaction.
 ///
 /// Files are parsed in parallel and written in transactions of about `batch_bytes` source bytes
 /// ([`BATCH_BYTES`] in the app). `cancel` is checked only after a transaction has committed, so
@@ -177,7 +178,7 @@ pub struct TextProgress {
 /// each uuid once.
 pub fn index_pending(
     conn: &mut Connection,
-    main_set: &mut dyn FnMut(&str) -> HashSet<String>,
+    main_set: &mut dyn FnMut(&str) -> Option<HashSet<String>>,
     progress: &dyn Fn(TextProgress),
     cancel: &AtomicBool,
     batch_bytes: u64,
@@ -213,7 +214,7 @@ pub fn index_pending(
         let (batch, tail) = rest.split_at(n);
         rest = tail;
         let docs: Vec<Vec<TextDoc>> = batch.par_iter().map(file_docs).collect();
-        let mut sets: HashMap<&str, HashSet<String>> = HashMap::new();
+        let mut sets: HashMap<&str, Option<HashSet<String>>> = HashMap::new();
         for (p, d) in batch.iter().zip(&docs) {
             if p.is_main && !d.is_empty() && !sets.contains_key(p.session_id.as_str()) {
                 sets.insert(&p.session_id, main_set(&p.session_id));
@@ -229,6 +230,13 @@ pub fn index_pending(
             let mut upd = tx.prepare_cached("UPDATE files SET text_offset=?2 WHERE id=?1")?;
             for (p, file_docs) in batch.iter().zip(&docs) {
                 let set = sets.get(p.session_id.as_str());
+                if matches!(set, Some(None)) {
+                    // Stays pending and out of the coverage.
+                    n -= 1;
+                    bytes -= p.to - p.from;
+                    continue;
+                }
+                let set = set.and_then(Option::as_ref);
                 for d in file_docs {
                     let on_main = !p.is_main || set.is_some_and(|s| s.contains(&d.node_uuid));
                     ins.execute(params![

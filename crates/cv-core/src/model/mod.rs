@@ -64,8 +64,8 @@ mod tests {
         assert_eq!(v["taskId"], "x");
 
         assert_eq!(
-            serde_json::to_value(ErrorCode::NotImplemented).unwrap(),
-            json!("notImplemented")
+            serde_json::to_value(ErrorCode::InvalidQuery).unwrap(),
+            json!("invalidQuery")
         );
         let back: TranscriptScope = serde_json::from_value(json!({"kind": "main"})).unwrap();
         assert_eq!(back, TranscriptScope::Main);
