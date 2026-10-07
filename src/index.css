@@ -33,6 +33,9 @@
     --color-secondary: #a1a1a6;
     --color-accent: #4c8df6;
     --color-selection: #2b3e5c;
+    --color-code: #2c2c2f;
+    --color-error: #ff8a80;
+    --color-error-bg: #3a2220;
   }
 }
 
