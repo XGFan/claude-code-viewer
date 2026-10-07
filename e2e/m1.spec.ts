@@ -86,6 +86,12 @@ test("显示系统消息后出现隐藏节点", async ({ page }) => {
   const hidden = page.getByText("可用技能：review、simplify、security-review");
   await expect(hidden).toHaveCount(0);
   await page.getByRole("checkbox", { name: "显示系统消息" }).click();
-  await page.getByTestId("transcript").evaluate((e) => (e.scrollTop = 0));
-  await expect(hidden).toBeVisible();
+  // The refetch with hidden nodes may land after our scroll while the view is still pinned to the bottom.
+  const transcript = page.getByTestId("transcript");
+  await expect
+    .poll(async () => {
+      await transcript.evaluate((e) => (e.scrollTop = 0));
+      return hidden.isVisible();
+    })
+    .toBe(true);
 });
