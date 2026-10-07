@@ -114,7 +114,11 @@ pub fn compute(conn: &Connection) -> CoreResult<Diagnostics> {
     d.versions
         .sort_by(|a, b| cmp_version(&b.version, &a.version));
 
-    d.duplicate_uuids = conn.query_row("SELECT coalesce(sum(dup_uuids), 0) FROM sessions", [], |r| r.get(0))?;
+    d.duplicate_uuids = conn.query_row(
+        "SELECT coalesce(sum(dup_uuids), 0) FROM sessions",
+        [],
+        |r| r.get(0),
+    )?;
 
     d.orphan_subagents = conn.query_row(
         "SELECT count(*) FROM subagents a
