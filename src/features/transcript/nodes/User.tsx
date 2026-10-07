@@ -32,9 +32,13 @@ export function UserPromptView({ node, body, branch }: { node: Node; body: UserB
       </div>
       <div className="max-w-[640px] rounded-xl border border-selection bg-selection/50 px-3.5 py-2.5 break-words whitespace-pre-wrap">
         {o.kind === "command" ? (
-          <code className="font-mono text-[12px]">
-            {o.name} {o.args}
-          </code>
+          <>
+            {/* Like the terminal: the command token stands out, its arguments read as prose. */}
+            <code data-testid="command-name" className="font-mono text-[12.5px] font-semibold text-accent">
+              {o.name}
+            </code>
+            {o.args && <> {o.args}</>}
+          </>
         ) : (
           body.text
         )}

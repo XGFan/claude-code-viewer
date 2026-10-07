@@ -96,10 +96,14 @@ test("显示系统消息后出现隐藏节点", async ({ page }) => {
     .toBe(true);
 });
 
-test("斜杠命令只显示一个斜杠", async ({ page }) => {
+test("斜杠命令只显示一个斜杠，命令名高亮", async ({ page }) => {
   await page.goto("/");
   await page.getByTestId("session-row").filter({ hasText: "/review 订单列表页" }).click();
   const transcript = page.getByTestId("transcript");
-  await expect(transcript.getByText("/review 订单列表页", { exact: true })).toBeVisible();
-  await expect(transcript.getByText("//review")).toHaveCount(0);
+  const name = transcript.getByTestId("command-name");
+  await expect(name).toHaveText("/review");
+  await expect(name.locator("..")).toHaveText("/review 订单列表页");
+  // Highlighted like the terminal: the command token is coloured differently from its arguments.
+  const [cmdColor, argColor] = await name.evaluate((e) => [getComputedStyle(e).color, getComputedStyle(e.parentElement!).color]);
+  expect(cmdColor).not.toBe(argColor);
 });
