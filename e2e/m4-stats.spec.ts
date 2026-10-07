@@ -34,4 +34,10 @@ test("点击工具行按 tool 下钻会话列表", async ({ page }) => {
   await page.getByTestId("tool-row").filter({ hasText: "Bash" }).click();
   await expect(page.getByTestId("stats")).toHaveCount(0);
   await expect(page.getByTestId("session-row").first()).toBeVisible();
+  const chip = page.getByTestId("drill-chip");
+  await expect(chip).toContainText("工具 Bash");
+  const filtered = await page.getByTestId("session-row").count();
+  await chip.getByRole("button", { name: "清除筛选" }).click();
+  await expect(chip).toHaveCount(0);
+  await expect.poll(() => page.getByTestId("session-row").count()).toBeGreaterThanOrEqual(filtered);
 });

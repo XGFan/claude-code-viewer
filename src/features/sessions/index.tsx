@@ -1,8 +1,8 @@
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { ChevronDown, GitBranch } from "lucide-react";
+import { ChevronDown, GitBranch, X } from "lucide-react";
 import { useMemo, useRef, type KeyboardEvent } from "react";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
-import type { ProjectSummary, SessionSort, SessionSummary } from "@/ipc/bindings";
+import type { Drill, ProjectSummary, SessionSort, SessionSummary } from "@/ipc/bindings";
 import { cn } from "@/lib/cn";
 import { formatRelative, formatTokens } from "@/lib/format";
 import { useProjects, useSessionList } from "@/queries";
@@ -27,6 +27,8 @@ export function SessionList() {
   const sort = useUi((s) => s.sessionSort);
   const descending = useUi((s) => s.sessionDescending);
   const setSort = useUi((s) => s.setSessionSort);
+  const drill = useUi((s) => s.statsDrill);
+  const setDrill = useUi((s) => s.setStatsDrill);
 
   const list = data ?? [];
   const names = useMemo(() => new Map((projects ?? []).map((p: ProjectSummary) => [p.id, p.displayName])), [projects]);
@@ -90,6 +92,17 @@ export function SessionList() {
           </DropdownMenuContent>
         </DropdownMenu>
       </div>
+      {drill && (
+        <div className="flex shrink-0 items-center gap-2 border-b border-border px-3.5 py-1.5 text-[12px]">
+          <span className="text-secondary">筛选</span>
+          <span data-testid="drill-chip" className="flex min-w-0 items-center gap-1 rounded-full bg-selection px-2 py-0.5 text-text">
+            <span className="truncate">{drillLabel(drill)}</span>
+            <button type="button" aria-label="清除筛选" onClick={() => setDrill(null)} className="rounded-full p-0.5 hover:bg-black/10">
+              <X size={11} strokeWidth={2} aria-hidden />
+            </button>
+          </span>
+        </div>
+      )}
       <div
         ref={scrollRef}
         tabIndex={0}
@@ -179,4 +192,23 @@ function SessionRow({
       </div>
     </div>
   );
+}
+
+const WEEKDAYS = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"];
+
+function drillLabel(d: Drill): string {
+  switch (d.kind) {
+    case "day": {
+      const [, m, day] = d.day.split("-");
+      return `${Number(m)}月${Number(day)}日`;
+    }
+    case "weekHour":
+      return `${WEEKDAYS[d.weekday] ?? ""} ${d.hour} 时`;
+    case "tool":
+      return `工具 ${d.name}`;
+    case "agentType":
+      return `Subagent ${d.agentType}`;
+    case "model":
+      return `模型 ${d.model}`;
+  }
 }

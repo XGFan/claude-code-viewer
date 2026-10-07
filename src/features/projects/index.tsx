@@ -4,6 +4,7 @@ import type { ReactNode } from "react";
 import { cn } from "@/lib/cn";
 import { useProjects } from "@/queries";
 import { useUi } from "@/state/ui";
+import { SettingsButton } from "@/features/settings";
 
 const nf = new Intl.NumberFormat("en-US");
 
@@ -94,15 +95,18 @@ export function StatsEntry() {
   const view = useUi((s) => s.view);
   const setView = useUi((s) => s.setView);
   return (
-    <div className="border-t border-border px-2.5 py-2">
-      <Item
-        testId="nav-stats"
-        selected={view === "stats"}
-        onClick={() => setView("stats")}
-        icon={<ChartColumn size={15} strokeWidth={1.5} />}
-      >
-        统计
-      </Item>
+    <div className="flex items-center gap-1 border-t border-border px-2.5 py-2">
+      <div className="min-w-0 flex-1">
+        <Item
+          testId="nav-stats"
+          selected={view === "stats"}
+          onClick={() => setView("stats")}
+          icon={<ChartColumn size={15} strokeWidth={1.5} />}
+        >
+          统计
+        </Item>
+      </div>
+      <SettingsButton className="size-7 shrink-0 text-secondary" />
     </div>
   );
 }
