@@ -24,8 +24,8 @@ export function SessionHeader() {
     : `已结束 · ${formatRelative(s.lastActiveMs)}`;
 
   return (
-    <header data-testid="header" data-tauri-drag-region className="flex shrink-0 flex-col gap-1.5 border-b border-border py-2.5 pr-5 pl-6">
-      <div className="flex flex-wrap items-center gap-2.5" data-tauri-drag-region>
+    <header data-testid="header" data-tauri-drag-region="deep" className="flex shrink-0 flex-col gap-1.5 border-b border-border py-2.5 pr-5 pl-6">
+      <div className="flex flex-wrap items-center gap-2.5">
         <h1 className="m-0 min-w-60 flex-1 truncate text-[15px] font-[650]">{s.title}</h1>
         <button
           type="button"

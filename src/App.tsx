@@ -25,7 +25,7 @@ export default function App() {
     <div className="grid h-full grid-rows-[1fr_28px]">
       <div className={cn("grid min-h-0", hideList ? "grid-cols-[216px_0px_1fr]" : "grid-cols-[216px_300px_1fr]")}>
         <aside data-testid="pane-projects" className="flex min-h-0 flex-col border-r border-border bg-sidebar">
-          <div data-tauri-drag-region className="h-[52px] shrink-0 pl-[78px]" />
+          <div data-tauri-drag-region="deep" className="h-[52px] shrink-0 pl-[78px]" />
           <div className="min-h-0 flex-1 overflow-y-auto">
             <ProjectList />
           </div>
@@ -43,7 +43,7 @@ export default function App() {
         <main data-testid="pane-conversation" className="flex min-h-0 min-w-0 flex-col bg-ground">
           {view === "sessions" && (
             <>
-              {!sessionId && <div data-tauri-drag-region className="h-[52px] shrink-0" />}
+              {!sessionId && <div data-tauri-drag-region="deep" className="h-[52px] shrink-0" />}
               <SessionHeader />
               <FindBar />
               <div className="flex min-h-0 flex-1">
@@ -55,7 +55,7 @@ export default function App() {
           )}
           {view === "stats" && (
             <>
-              <div data-tauri-drag-region className="h-[52px] shrink-0" />
+              <div data-tauri-drag-region="deep" className="h-[52px] shrink-0" />
               <div className="min-h-0 flex-1 overflow-auto">
                 <StatsPanel />
               </div>
@@ -63,7 +63,7 @@ export default function App() {
           )}
           {view === "diagnostics" && (
             <>
-              <div data-tauri-drag-region className="h-[52px] shrink-0" />
+              <div data-tauri-drag-region="deep" className="h-[52px] shrink-0" />
               <div className="min-h-0 flex-1 overflow-auto">
                 <DiagnosticsPage />
               </div>

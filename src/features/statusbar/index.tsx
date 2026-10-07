@@ -16,6 +16,7 @@ export function StatusBar() {
   return (
     <div
       data-testid="statusbar"
+      data-tauri-drag-region="deep"
       className="flex items-center gap-3 border-t border-border bg-sidebar px-3 text-[11px] text-secondary"
     >
       {s.phase === "error" ? (

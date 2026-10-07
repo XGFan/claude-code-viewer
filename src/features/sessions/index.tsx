@@ -61,8 +61,8 @@ export function SessionList() {
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <div data-tauri-drag-region className="flex h-[52px] shrink-0 items-center gap-2 border-b border-border px-3.5">
-        <div className="min-w-0 flex-1" data-tauri-drag-region>
+      <div data-tauri-drag-region="deep" className="flex h-[52px] shrink-0 items-center gap-2 border-b border-border px-3.5">
+        <div className="min-w-0 flex-1">
           <div className="truncate text-[14px] font-semibold">{title}</div>
           <div className="text-[11px] text-secondary">
             {liveCount} 个进行中 · 按{sortInfo.order}

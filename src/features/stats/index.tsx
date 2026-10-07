@@ -220,7 +220,7 @@ export function StatsPanel() {
 
   return (
     <div data-testid="stats" className="@container flex min-w-0 flex-col gap-4 bg-list px-6 pb-6">
-      <header className="flex flex-wrap items-center gap-3 border-b border-border py-3">
+      <header data-tauri-drag-region="deep" className="flex flex-wrap items-center gap-3 border-b border-border py-3">
         <h1 className="m-0 flex-1 text-[16px] font-semibold">统计</h1>
         <Segmented label="时间范围" value={rangeKey} options={RANGES.map((r) => ({ key: r.key, label: r.label }))} onChange={setRangeKey} />
         <ProjectFilter value={projectIds} onChange={setProjectIds} />
