@@ -208,7 +208,7 @@ export function TranscriptList({ transcript, ready, scope, follow = false, agent
       rows.flatMap((r) => {
         if (r.kind !== "prompt") return [];
         const o = r.body.origin;
-        const text = o.kind === "command" ? `/${o.name} ${o.args}` : r.body.text;
+        const text = o.kind === "command" ? `${o.name} ${o.args}`.trim() : r.body.text;
         return [{ turn: r.turn, nodeId: r.node.id, text: text.replace(/\s+/g, " ").trim() }];
       }),
     );

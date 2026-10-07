@@ -138,7 +138,9 @@ function turnNodes(prefix: string, startMs: number, turns: Turn[], inheritedCoun
   turns.forEach((turn, i) => {
     const t0 = startMs + i * 3 * MIN;
     const uInherited = nodes.length < inheritedCount;
-    nodes.push(userNode(`${prefix}-u${i}`, t0, turn.u, { inherited: uInherited }));
+    const cmd = turn.u.match(/^(\/\S+)\s*(.*)$/s);
+    const origin = cmd ? ({ kind: "command", name: cmd[1]!, args: cmd[2]! } as const) : undefined;
+    nodes.push(userNode(`${prefix}-u${i}`, t0, turn.u, { inherited: uInherited, origin }));
     const blocks = [{ kind: "text", text: turn.a } as const];
     const all = turn.bash
       ? [...blocks, call(`${prefix}-tu${i}`, "Bash", { command: turn.bash.command }, { text: turn.bash.out, isError: turn.bash.isError ?? false })]

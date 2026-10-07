@@ -27,13 +27,13 @@ export function UserPromptView({ node, body, branch }: { node: Node; body: UserB
     <Anchor nodeId={node.id} className="group/copy flex flex-col items-end gap-1.5">
       <div className="flex items-center gap-2 text-[11px] text-secondary">
         {branch && <BranchSwitcher point={branch} />}
-        <CopyButton text={o.kind === "command" ? `/${o.name} ${o.args}` : body.text} />
+        <CopyButton text={o.kind === "command" ? `${o.name} ${o.args}`.trim() : body.text} />
         <span>你 · {clock(node.timestampMs)}</span>
       </div>
       <div className="max-w-[640px] rounded-xl border border-selection bg-selection/50 px-3.5 py-2.5 break-words whitespace-pre-wrap">
         {o.kind === "command" ? (
           <code className="font-mono text-[12px]">
-            /{o.name} {o.args}
+            {o.name} {o.args}
           </code>
         ) : (
           body.text

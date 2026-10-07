@@ -95,3 +95,11 @@ test("显示系统消息后出现隐藏节点", async ({ page }) => {
     })
     .toBe(true);
 });
+
+test("斜杠命令只显示一个斜杠", async ({ page }) => {
+  await page.goto("/");
+  await page.getByTestId("session-row").filter({ hasText: "/review 订单列表页" }).click();
+  const transcript = page.getByTestId("transcript");
+  await expect(transcript.getByText("/review 订单列表页", { exact: true })).toBeVisible();
+  await expect(transcript.getByText("//review")).toHaveCount(0);
+});

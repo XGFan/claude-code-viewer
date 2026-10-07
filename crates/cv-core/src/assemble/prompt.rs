@@ -55,8 +55,9 @@ pub fn classify(e: &RawEntry, text: &str) -> PromptOrigin {
     if (t.starts_with("<command-name>") || t.starts_with("<command-message>"))
         && let Some(name) = tag(t, "command-name")
     {
+        // Claude Code stores the name as typed ("/release"); a few entries omit the slash.
         return PromptOrigin::Command {
-            name,
+            name: format!("/{}", name.trim_start_matches('/')),
             args: tag(t, "command-args").unwrap_or_default(),
         };
     }
@@ -153,6 +154,8 @@ mod tests {
             }
         );
         assert_eq!(title_text(&o, cmd), "/release v1.2.0");
+        let bare = "<command-message>codex-cli-runtime</command-message>\n<command-name>codex-cli-runtime</command-name>";
+        assert!(matches!(classify(&e, bare), PromptOrigin::Command { name, .. } if name == "/codex-cli-runtime"));
         assert!(is_human(&e, &o));
 
         let n = "<task-notification>\n<task-id>a1</task-id>\n<tool-use-id>toolu_1</tool-use-id>\n<status>completed</status>\n<summary>done</summary>\n</task-notification>";
