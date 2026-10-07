@@ -1,0 +1,110 @@
+import { keepPreviousData, useQuery } from "@tanstack/react-query";
+import { api } from "@/ipc";
+import type {
+  FindRequest,
+  ImageRequest,
+  SearchRequest,
+  SessionQuery,
+  StatsRequest,
+  ToolDetailRequest,
+  TranscriptRequest,
+} from "@/ipc/bindings";
+import { useUi } from "@/state/ui";
+
+export const queryKeys = {
+  appInfo: ["appInfo"] as const,
+  indexStatus: ["indexStatus"] as const,
+  projects: ["projects"] as const,
+  sessions: (q?: SessionQuery) => (q ? (["sessions", q] as const) : (["sessions"] as const)),
+  session: (id: string) => ["session", id] as const,
+  /** `[ "transcript", sessionId, req ]`: events invalidate by session id prefix. */
+  transcript: (req: TranscriptRequest) => ["transcript", req.sessionId, req] as const,
+  toolDetail: (req: ToolDetailRequest) => ["toolDetail", req.sessionId, req] as const,
+  image: (req: ImageRequest) => ["image", req.sessionId, req.image.nodeId, req.image.ordinal, req.scope] as const,
+  search: (req: SearchRequest) => ["search", req] as const,
+  find: (req: FindRequest) => ["find", req.sessionId, req] as const,
+  stats: (req: StatsRequest) => ["stats", req] as const,
+  diagnostics: ["diagnostics"] as const,
+};
+
+export const useAppInfo = () => useQuery({ queryKey: queryKeys.appInfo, queryFn: () => api.getAppInfo() });
+
+/** Kept fresh by `useBackendEvents` (setQueryData on each event). */
+export const useIndexStatus = () =>
+  useQuery({ queryKey: queryKeys.indexStatus, queryFn: () => api.getIndexStatus(), staleTime: Infinity });
+
+export const useProjects = () => useQuery({ queryKey: queryKeys.projects, queryFn: () => api.listProjects() });
+
+export const useSessions = (query: SessionQuery) =>
+  useQuery({ queryKey: queryKeys.sessions(query), queryFn: () => api.listSessions(query), placeholderData: keepPreviousData });
+
+/** Session list for the current project / sort selection in the UI store. */
+export function useSessionList() {
+  const projectIds = useUi((s) => s.projectIds);
+  const sort = useUi((s) => s.sessionSort);
+  const descending = useUi((s) => s.sessionDescending);
+  const drill = useUi((s) => s.statsDrill);
+  return useSessions({ projectIds, sort, descending, liveOnly: false, timeRange: null, drill });
+}
+
+export const useSession = (sessionId: string | null) =>
+  useQuery({
+    queryKey: queryKeys.session(sessionId ?? ""),
+    queryFn: () => api.getSession(sessionId!),
+    enabled: sessionId != null,
+  });
+
+export const useTranscript = (req: TranscriptRequest | null) =>
+  useQuery({
+    queryKey: req ? queryKeys.transcript(req) : ["transcript", null],
+    queryFn: () => api.getTranscript(req!),
+    enabled: req != null,
+    placeholderData: keepPreviousData,
+  });
+
+/** Transcript of the open session using the scope / branch / hidden state from the UI store. */
+export function useCurrentTranscript() {
+  const sessionId = useUi((s) => s.sessionId);
+  const scope = useUi((s) => s.scope);
+  const branchChoices = useUi((s) => s.branchChoices);
+  const includeHidden = useUi((s) => s.showHidden);
+  return useTranscript(sessionId ? { sessionId, scope, branchChoices, includeHidden } : null);
+}
+
+export const useToolDetail = (req: ToolDetailRequest | null, enabled = true) =>
+  useQuery({
+    queryKey: req ? queryKeys.toolDetail(req) : ["toolDetail", null],
+    queryFn: () => api.getToolDetail(req!),
+    enabled: enabled && req != null,
+    staleTime: Infinity,
+  });
+
+export const useImage = (req: ImageRequest | null) =>
+  useQuery({
+    queryKey: req ? queryKeys.image(req) : ["image", null],
+    queryFn: () => api.getImage(req!),
+    enabled: req != null,
+    staleTime: Infinity,
+  });
+
+/** Disabled while the query is blank. */
+export const useSearch = (req: SearchRequest | null) =>
+  useQuery({
+    queryKey: req ? queryKeys.search(req) : ["search", null],
+    queryFn: () => api.search(req!),
+    enabled: req != null && req.query.trim() !== "",
+    placeholderData: keepPreviousData,
+  });
+
+export const useFind = (req: FindRequest | null) =>
+  useQuery({
+    queryKey: req ? queryKeys.find(req) : ["find", null],
+    queryFn: () => api.findInSession(req!),
+    enabled: req != null && req.query !== "",
+    placeholderData: keepPreviousData,
+  });
+
+export const useStats = (req: StatsRequest) =>
+  useQuery({ queryKey: queryKeys.stats(req), queryFn: () => api.getStats(req), placeholderData: keepPreviousData });
+
+export const useDiagnostics = () => useQuery({ queryKey: queryKeys.diagnostics, queryFn: () => api.getDiagnostics() });

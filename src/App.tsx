@@ -1,5 +1,5 @@
-import { useState } from "react";
 import { cn } from "@/lib/cn";
+import { useUi } from "@/state/ui";
 import { DiagnosticsPage } from "@/features/diagnostics";
 import { FindBar } from "@/features/find";
 import { Outline } from "@/features/outline";
@@ -13,10 +13,9 @@ import { StatusBar } from "@/features/statusbar";
 import { SubagentPanel } from "@/features/subagent-panel";
 import { TranscriptView } from "@/features/transcript";
 
-type View = "sessions" | "stats" | "diagnostics";
-
 export default function App() {
-  const [view, setView] = useState<View>("sessions");
+  const view = useUi((s) => s.view);
+  const setView = useUi((s) => s.setView);
 
   return (
     <div className="grid h-full grid-rows-[1fr_28px]">
