@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import { composeEnd, composeStart, queriesOf } from "./ime";
 
 const RICH_TITLE = "为 /v1/chat 接口增加令牌桶限流中间件";
 
@@ -86,4 +87,20 @@ test("复制：resume 命令、Session ID、消息；在 Finder 中显示", asyn
   const copied = (await calls(page)).at(-1)!;
   expect(copied.method).toBe("copyText");
   expect(String(copied.args[0]).length).toBeGreaterThan(0);
+});
+
+test("⌘F 输入法组字期间不查找，确认后才查找", async ({ page }) => {
+  await openRich(page);
+  await page.keyboard.press("Meta+f");
+  const input = page.getByTestId("find-input");
+  await expect(input).toBeFocused();
+  await composeStart(input, ["c", "ca", "case"]);
+  await expect(input).toHaveValue("case");
+  // Longer than the 180 ms debounce: nothing may be queried while composing.
+  await page.waitForTimeout(600);
+  expect(await queriesOf(page, "findInSession")).toEqual([]);
+  await expect(page.getByTestId("find-count")).toHaveText("");
+  await composeEnd(input, "case_0007");
+  await expect(page.getByTestId("find-count")).toHaveText("1 / 1");
+  expect(await queriesOf(page, "findInSession")).toEqual(["case_0007"]);
 });

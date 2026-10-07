@@ -22,6 +22,7 @@ import { queryKeys, useIndexStatus, useProjects, useTranscript } from "@/queries
 import { useUi } from "@/state/ui";
 
 const DAY_MS = 86_400_000;
+const nf = new Intl.NumberFormat("en-US");
 const TIME_OPTIONS = [
   { label: "全部", days: 0 },
   { label: "近 7 天", days: 7 },
@@ -151,6 +152,8 @@ export function SearchOverlay() {
   useHotkey("Meta+K", () => setOpen(!useUi.getState().searchOpen), { enableInInputs: true });
 
   const [input, setInput] = useState("");
+  // IME composition (e.g. pinyin) puts unconfirmed text in the input; query only confirmed text.
+  const [composing, setComposing] = useState(false);
   const [query, setQuery] = useState("");
   const [projectId, setProjectId] = useState<string | null>(null);
   const [days, setDays] = useState(0);
@@ -160,10 +163,15 @@ export function SearchOverlay() {
   const [jumpError, setJumpError] = useState<string | null>(null);
   const [scan, setScan] = useState<ToolScan>({ groups: [], progress: null, error: null });
 
+  // The input unmounts on close, possibly mid-composition (no compositionend follows).
   useEffect(() => {
+    if (!open) setComposing(false);
+  }, [open]);
+  useEffect(() => {
+    if (composing) return;
     const t = setTimeout(() => setQuery(input.trim()), 200);
     return () => clearTimeout(t);
-  }, [input]);
+  }, [input, composing]);
 
   const projects = useProjects().data ?? [];
   const status = useIndexStatus().data;
@@ -236,7 +244,11 @@ export function SearchOverlay() {
     }
   };
 
-  const pct = status && !status.textReady && status.filesTotal > 0 ? Math.floor((status.filesDone / status.filesTotal) * 100) : null;
+  // Phase-2 progress (files of the text backlog), only while the backlog is being built.
+  const textProgress =
+    status && !status.textReady && status.phase === "indexingText"
+      ? `${nf.format(status.filesDone)} / ${nf.format(status.filesTotal)} 个文件`
+      : null;
   const timeLabel = TIME_OPTIONS.find((t) => t.days === days)!.label;
   const projectLabel = projects.find((p) => p.id === projectId)?.displayName ?? "全部";
 
@@ -263,6 +275,8 @@ export function SearchOverlay() {
                   setInput(v);
                   setJumpError(null);
                 }}
+                onCompositionStart={() => setComposing(true)}
+                onCompositionEnd={() => setComposing(false)}
                 className="min-w-0 flex-1 bg-transparent text-[18px] outline-none placeholder:text-secondary"
               />
               <span className="text-[12px] text-secondary">esc 关闭</span>
@@ -318,7 +332,7 @@ export function SearchOverlay() {
                 )}
                 {data && !data.indexComplete && (
                   <span data-testid="search-incomplete">
-                    全文索引已完成 {pct ?? 0}%，结果可能不完整
+                    {textProgress ? `正在建立全文索引 · ${textProgress}，结果可能不完整` : "全文索引尚未完成，结果可能不完整"}
                   </span>
                 )}
                 {data?.mode && MODE_HINT[data.mode] && <span>{MODE_HINT[data.mode]}</span>}
@@ -336,13 +350,13 @@ export function SearchOverlay() {
                   <div className="font-semibold">没有找到 “{query}”</div>
                   <div className="text-[12px] text-text/80">
                     {[
-                      pct != null && `全文索引已完成 ${pct}%`,
+                      data && !data.indexComplete && "全文索引尚未完成",
                       !withTools && "本次搜索未包含工具输出",
                       days > 0 && `时间范围为${timeLabel}`,
                     ]
                       .filter(Boolean)
                       .join("；")}
-                    {pct == null && withTools && days === 0 ? "已搜索全部范围。" : "。"}
+                    {data?.indexComplete && withTools && days === 0 ? "已搜索全部范围。" : "。"}
                   </div>
                   <div className="flex flex-wrap gap-2">
                     {!withTools && (

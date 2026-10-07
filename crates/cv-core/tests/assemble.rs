@@ -619,6 +619,49 @@ fn subagents_link_by_tool_use_id_name_and_parent() {
 }
 
 #[test]
+fn teammate_messages_are_not_human_prompts_and_empty_system_entries_get_text() {
+    let s = open("subagents", ids::SUBAGENTS_DIR, ids::SUBAGENTS);
+    let t = main_t(&s, false);
+    let n = t
+        .nodes
+        .iter()
+        .find(|n| n.id == "7e1a0c55-3b2d-5f4e-9a61-0d2c8b7f4e10")
+        .expect("teammate message on the Main Line");
+    match &n.body {
+        NodeBody::UserPrompt { origin, text, .. } => {
+            assert_eq!(
+                origin,
+                &PromptOrigin::Teammate {
+                    teammate_id: Some("gui-impl".into()),
+                    color: Some("red".into()),
+                    summary: Some("GUI shell done, all checks green".into()),
+                }
+            );
+            assert!(text.contains("The GUI shell builds"));
+        }
+        b => panic!("unexpected {b:?}"),
+    }
+    // Not a branch head, not counted, not the title.
+    assert!(t.branch_points.is_empty());
+    let a = summarize(&s.skeleton);
+    assert_eq!(a.message_count, 5, "1 prompt + 4 assistant messages");
+
+    // `agents_killed` carries only its envelope: shown with a readable text, never empty.
+    let killed = t
+        .nodes
+        .iter()
+        .find(|n| n.id == "a3c9e2f1-6b4d-5e8a-8f20-4d1b7c9e0a36")
+        .expect("agents_killed is visible");
+    match &killed.body {
+        NodeBody::System { subtype, text, .. } => {
+            assert_eq!(subtype, "agents_killed");
+            assert_eq!(text, "已终止所有后台 agent");
+        }
+        b => panic!("unexpected {b:?}"),
+    }
+}
+
+#[test]
 fn subagent_scope_assembles_the_agent_file() {
     let s = open("subagents", ids::SUBAGENTS_DIR, ids::SUBAGENTS);
     let f = agent_file(&s, ASYNC);

@@ -196,3 +196,18 @@ test("从其他 Session 发起 pendingJump 时打开目标 Session 并定位", a
   await expect(hit).toBeVisible();
   await expect(hit).toBeInViewport();
 });
+
+test("Teammate 消息显示为可折叠卡片而非用户提问", async ({ page }) => {
+  await openSession(page, RICH_TITLE);
+  const card = page.getByTestId("teammate-message");
+  await reveal(page.getByTestId("transcript"), card);
+  await expect(card).toContainText("Teammate · docs-writer");
+  await expect(card.getByTestId("teammate-preview")).toHaveText("限流文档已更新");
+  await expect(card).not.toContainText("你 ·");
+  await expect(card.getByTestId("teammate-body")).toHaveCount(0);
+  await card.getByRole("button", { expanded: false }).click();
+  const body = card.getByTestId("teammate-body");
+  await expect(body).toContainText("已在 docs/rate-limit.md 补充配置说明");
+  await expect(body.locator("li")).toHaveCount(2);
+  await expect(body).not.toContainText("This came from another Claude session");
+});

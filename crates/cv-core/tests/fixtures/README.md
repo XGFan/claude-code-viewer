@@ -17,7 +17,7 @@ cargo run -p cv-core --example sanitize -- <file.jsonl|file.json> [--lines 1-50,
 
 Counting rules used in the tables (independent of cv-core): *human prompts* = `user` entries that are not `isMeta`,
 not `isCompactSummary`, whose `origin.kind` is absent or `human`, and whose content is not a tool result,
-`<local-command…` or `<system-reminder…` (command prompts such as `<command-name>/release</command-name>` count);
+`<local-command…`, `<system-reminder…` or a relayed `<teammate-message…` (command prompts such as `<command-name>/release</command-name>` count);
 *assistant msg ids* = distinct `message.id`; tokens use the max of each usage field per `message.id`
 (`message_count` in the index = human prompts + assistant msg ids). Total size is far below 2 MB.
 
@@ -118,9 +118,9 @@ its tool_result must not produce a BranchPoint. Choosing the "Now add unit tests
 
 | file | path under `projects/<dir>/` | lines | failed | uuids | dup uuids | human prompts | assistant msg ids | tool_use | tool errors | tokens in/out/cr/cc |
 |---|---|---|---|---|---|---|---|---|---|---|
-| main | `-Users-dev-code-tidepool/ee98ea57….jsonl` | 16 | 0 | 15 | 0 | 1 | 4 | 3 | 0 | 10 / 13244 / 346381 / 100767 |
+| main | `-Users-dev-code-tidepool/ee98ea57….jsonl` | 18 | 0 | 17 | 0 | 1 | 4 | 3 | 0 | 10 / 13244 / 346381 / 100767 |
 
-Main line: 1 prompt, then 3 Agent calls (tool_use: 3), a task-notification prompt and a closing assistant message. Sidecar files (`agent-<id>.jsonl` + `.meta.json`, all lines `isSidechain:true`, `agentId` = id):
+Main line: 1 prompt, then 3 Agent calls (tool_use: 3), a task-notification prompt and a closing assistant message. Hand-written tail (shape of real 2.1.207 lines): a relayed teammate message from `gui-impl` (`Another Claude session sent a message:\n<teammate-message teammate_id="gui-impl" color="red" summary="…">…</teammate-message>` plus the injected notice; not a human prompt) and a system `agents_killed` entry (envelope only, no `content`). Sidecar files (`agent-<id>.jsonl` + `.meta.json`, all lines `isSidechain:true`, `agentId` = id):
 
 | agent id | file lines | role | link |
 |---|---|---|---|

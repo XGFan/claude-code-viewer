@@ -1,7 +1,11 @@
-//! `PromptOrigin` classification; `<command-name>` and `<task-notification>` parsing.
+//! `PromptOrigin` classification; `<command-name>`, `<task-notification>` and
+//! `<teammate-message>` parsing.
 
 use crate::model::PromptOrigin;
 use crate::raw::RawEntry;
+
+/// Line Claude Code puts before a `<teammate-message>` it relays to the lead session.
+const TEAMMATE_PREAMBLE: &str = "Another Claude session sent a message:";
 
 /// Title / first-prompt length cap in characters (§3.4 step 9).
 pub const TITLE_CHARS: usize = 120;
@@ -38,6 +42,14 @@ pub fn classify(e: &RawEntry, text: &str) -> PromptOrigin {
             tool_use_id: tag(t, "tool-use-id"),
             status: tag(t, "status"),
             summary: tag(t, "summary"),
+        };
+    }
+    let teammate = t.strip_prefix(TEAMMATE_PREAMBLE).map_or(t, str::trim_start);
+    if teammate.starts_with("<teammate-message") {
+        return PromptOrigin::Teammate {
+            teammate_id: attr(teammate, "teammate_id"),
+            color: attr(teammate, "color"),
+            summary: attr(teammate, "summary"),
         };
     }
     if (t.starts_with("<command-name>") || t.starts_with("<command-message>"))
@@ -100,6 +112,16 @@ pub fn truncate_chars(s: &str, n: usize) -> String {
     }
 }
 
+/// Value of `name="…"` in the opening tag at the start of `s`; `None` when absent or empty.
+fn attr(s: &str, name: &str) -> Option<String> {
+    let open = &s[..s.find('>')?];
+    let key = format!(" {name}=\"");
+    let start = open.find(&key)? + key.len();
+    let end = open[start..].find('"')? + start;
+    let v = open[start..end].trim();
+    (!v.is_empty()).then(|| v.to_owned())
+}
+
 /// Inner text of the first `<name>…</name>` in `s`, trimmed; `None` when absent or empty.
 pub fn tag(s: &str, name: &str) -> Option<String> {
     let open = format!("<{name}>");
@@ -156,6 +178,34 @@ mod tests {
         assert_eq!(classify(&meta, "hi"), PromptOrigin::Meta);
         let peer = entry(r#"{"type":"user","origin":{"kind":"peer"}}"#);
         assert!(!is_human(&peer, &classify(&peer, "hi")));
+    }
+
+    #[test]
+    fn classifies_teammate_messages() {
+        let e = entry(r#"{"type":"user","message":{"content":"x"}}"#);
+        let relayed = "Another Claude session sent a message:\n<teammate-message teammate_id=\"gui-impl\" color=\"red\" summary=\"GUI done\">\nbody\n</teammate-message>\n\nThis came from another Claude session";
+        let o = classify(&e, relayed);
+        assert_eq!(
+            o,
+            PromptOrigin::Teammate {
+                teammate_id: Some("gui-impl".into()),
+                color: Some("red".into()),
+                summary: Some("GUI done".into()),
+            }
+        );
+        assert!(!is_human(&e, &o));
+        let bare = "<teammate-message teammate_id=\"app\">\n{\"type\":\"idle_notification\"}\n</teammate-message>";
+        assert_eq!(
+            classify(&e, bare),
+            PromptOrigin::Teammate {
+                teammate_id: Some("app".into()),
+                color: None,
+                summary: None,
+            }
+        );
+        // A typed prompt that merely mentions the tag stays human.
+        let typed = "Fix how `<teammate-message teammate_id=\"x\">` renders";
+        assert_eq!(classify(&e, typed), PromptOrigin::Human);
     }
 
     #[test]

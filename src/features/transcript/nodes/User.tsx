@@ -1,9 +1,11 @@
-import { ArrowUp, Clock } from "lucide-react";
+import { ArrowUp, ChevronDown, ChevronRight, Clock } from "lucide-react";
 import { CopyButton } from "@/components/ui/copy-button";
 import type { BranchPoint, Node } from "@/ipc/bindings";
+import { Markdown } from "@/lib/markdown";
+import { useUi } from "@/state/ui";
 import { BranchSwitcher } from "../BranchSwitcher";
 import { ImageRefs } from "../tools";
-import { clock } from "../util";
+import { clock, prettyJson } from "../util";
 import { Anchor } from "./Anchor";
 import { scrollToNode, useTranscriptCtx } from "./scroll";
 
@@ -12,6 +14,7 @@ type UserBody = Extract<Node["body"], { kind: "userPrompt" }>;
 /** Human / command prompt (turn start), with the branch switcher when it is a branch head. */
 export function UserPromptView({ node, body, branch }: { node: Node; body: UserBody; branch?: BranchPoint | null }) {
   const o = body.origin;
+  if (o.kind === "teammate") return <TeammateCard node={node} body={body} />;
   if (o.kind !== "human" && o.kind !== "command") {
     return (
       <div className="flex items-baseline gap-2 text-[12px] text-secondary">
@@ -75,6 +78,79 @@ export function NotificationRow({ node, body }: { node: Node; body: UserBody }) 
         </button>
       )}
     </Anchor>
+  );
+}
+
+type TeammateOrigin = Extract<UserBody["origin"], { kind: "teammate" }>;
+
+/** The `<teammate-message>` blocks of a relayed message (the injected notice after them is dropped). */
+function teammateMessages(text: string): { id: string | null; body: string }[] {
+  const out = [...text.matchAll(/<teammate-message\b([^>]*)>([\s\S]*?)<\/teammate-message>/g)].map((m) => ({
+    id: /\bteammate_id="([^"]*)"/.exec(m[1])?.[1] || null,
+    body: m[2].trim(),
+  }));
+  return out.length ? out : [{ id: null, body: text.trim() }];
+}
+
+/** One-line preview of a message body: a JSON message's `summary` (else its `type`), else the first non-empty line. */
+function previewOf(body: string): string {
+  try {
+    const v: unknown = JSON.parse(body);
+    if (v && typeof v === "object") {
+      const { summary, type } = v as { summary?: unknown; type?: unknown };
+      if (typeof summary === "string" && summary) return summary;
+      if (typeof type === "string") return type;
+    }
+  } catch {
+    /* plain text */
+  }
+  return body.split("\n").find((l) => l.trim())?.trim() ?? "";
+}
+
+const isJson = (body: string) => /^[[{]/.test(body) && prettyJson(body) !== body;
+
+/** Message relayed from another Claude session of an agent team: not the user's prompt, a collapsed card. */
+function TeammateCard({ node, body }: { node: Node; body: UserBody }) {
+  const o = body.origin as TeammateOrigin;
+  const key = `teammate:${node.id}`;
+  const open = useUi((s) => s.expanded[key] ?? false);
+  const toggle = useUi((s) => s.toggleExpanded);
+  const messages = teammateMessages(body.text);
+  const preview = o.summary ?? previewOf(messages[0].body);
+  return (
+    <div data-testid="teammate-message" className="overflow-hidden rounded-lg border border-border">
+      <button
+        type="button"
+        aria-expanded={open}
+        onClick={() => toggle(key)}
+        className="flex w-full items-center gap-2 bg-list px-2.5 py-1.5 text-left text-[12px] text-text/80"
+      >
+        {open ? <ChevronDown size={12} strokeWidth={1.8} aria-hidden /> : <ChevronRight size={12} strokeWidth={1.8} aria-hidden />}
+        {o.color && <span aria-hidden className="size-2 shrink-0 rounded-full" style={{ backgroundColor: o.color }} />}
+        <span className="shrink-0 font-semibold">Teammate · {o.teammateId ?? "未知"}</span>
+        {messages.length > 1 && <span className="shrink-0 text-secondary">{messages.length} 条</span>}
+        <span data-testid="teammate-preview" className="min-w-0 flex-1 truncate text-secondary">
+          {preview}
+        </span>
+        <span className="shrink-0 text-secondary">{clock(node.timestampMs)}</span>
+      </button>
+      {open && (
+        <div data-testid="teammate-body" className="flex flex-col gap-2 border-t border-border px-3 py-2 text-[12px]">
+          {messages.map((m, i) => (
+            <div key={i} className="flex flex-col gap-1">
+              {messages.length > 1 && <span className="text-[11px] text-secondary">{m.id ?? "未知"}</span>}
+              {isJson(m.body) ? (
+                <pre className="m-0 max-h-60 overflow-auto rounded bg-code px-2.5 py-1.5 font-mono text-[12px] leading-[1.55] break-words whitespace-pre-wrap">
+                  {prettyJson(m.body)}
+                </pre>
+              ) : (
+                <Markdown text={m.body} />
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
   );
 }
 

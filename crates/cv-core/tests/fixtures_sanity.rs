@@ -82,7 +82,7 @@ const FILES: &[(&str, usize, usize)] = &[
     ),
     (
         "subagents/projects/-Users-dev-code-tidepool/ee98ea57-9b48-56b0-9860-5c8105c7f967.jsonl",
-        16,
+        18,
         0,
     ),
     (
@@ -307,7 +307,7 @@ const FACTS: &[FactRow] = &[
     ),
     (
         "subagents/projects/-Users-dev-code-tidepool/ee98ea57-9b48-56b0-9860-5c8105c7f967.jsonl",
-        15,
+        17,
         0,
         1,
         4,
@@ -399,7 +399,10 @@ fn is_human(v: &Value) -> bool {
     }
     match v.pointer("/message/content") {
         Some(Value::String(t)) => {
-            !t.starts_with("<local-command") && !t.starts_with("<system-reminder")
+            !t.starts_with("<local-command")
+                && !t.starts_with("<system-reminder")
+                && !t.starts_with("<teammate-message")
+                && !t.starts_with("Another Claude session sent a message:")
         }
         Some(Value::Array(a)) => {
             let ty = |b: &Value| s(b, "type").to_string();

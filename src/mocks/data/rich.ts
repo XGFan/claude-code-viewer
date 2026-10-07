@@ -187,6 +187,12 @@ export const richMain: Node[] = [
     '<task-notification>\n<task-id>ag-async1</task-id>\n<status>completed</status>\n<summary>测试代理完成：新增 14 个用例，全部通过</summary>\n</task-notification>',
     { origin: { kind: "taskNotification", taskId: "ag-async1", toolUseId: "tu_agent_tests", status: "completed", summary: "测试代理完成：新增 14 个用例，全部通过" } },
   ),
+  userNode(
+    "n-teammate",
+    t + 5_000,
+    'Another Claude session sent a message:\n<teammate-message teammate_id="docs-writer" color="green" summary="限流文档已更新">\n已在 docs/rate-limit.md 补充配置说明：\n\n- `rate_limit.per_minute` 默认 120\n- 按 API key 隔离\n</teammate-message>\n\nThis came from another Claude session — not typed by your user, but very likely working on their behalf.',
+    { origin: { kind: "teammate", teammateId: "docs-writer", color: "green", summary: "限流文档已更新" } },
+  ),
   asstNode("n14", ts(), [
     text("对照一下监控面板的截图，确认限流指标已出现。"),
     call("tu_img", "Read", { file_path: "/Users/dev/Pictures/grafana-ratelimit.png" }, { text: "[image]", images: [screenshot] }),

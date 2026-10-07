@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import { composeEnd, composeStart, queriesOf } from "./ime";
 
 async function openSearch(page: Page) {
   await page.goto("/");
@@ -61,4 +62,16 @@ test("无结果时仅陈述事实并提供清除时间过滤", async ({ page }) 
   await expect(page.getByTestId("search-empty")).toContainText("时间范围为近 7 天");
   await page.getByRole("button", { name: "清除时间过滤" }).click();
   await expect(page.getByRole("button", { name: /时间：全部/ })).toBeVisible();
+});
+
+test("输入法组字期间不发起搜索，确认后才按确认的文字搜索", async ({ page }) => {
+  await openSearch(page);
+  await composeStart(input(page), ["l", "ling", "ling pai tong"]);
+  await expect(input(page)).toHaveValue("ling pai tong");
+  // Longer than the 200 ms debounce: nothing may be queried while composing.
+  await page.waitForTimeout(600);
+  expect(await queriesOf(page, "search")).toEqual([]);
+  await composeEnd(input(page), "令牌桶");
+  await expect(page.getByTestId("search-hit").first()).toBeVisible();
+  expect(await queriesOf(page, "search")).toEqual(["令牌桶"]);
 });

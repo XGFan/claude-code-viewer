@@ -27,6 +27,12 @@ export function FindBar() {
   const branchChoices = useUi((s) => s.branchChoices);
   const panelOpen = useUi((s) => s.panelStack.length > 0);
   const [matches, setMatches] = useState<FindMatch[]>([]);
+  // IME composition (e.g. pinyin) puts unconfirmed text in the input; find only confirmed text.
+  const [composing, setComposing] = useState(false);
+  const [settledQuery, setSettledQuery] = useState(query);
+  useEffect(() => {
+    if (!composing) setSettledQuery(query);
+  }, [query, composing]);
   const [scope, setScope] = useState<TranscriptScope>(MAIN);
   const inputRef = useRef<HTMLInputElement>(null);
   const lastScope = useRef<TranscriptScope>(MAIN);
@@ -77,6 +83,7 @@ export function FindBar() {
   goRef.current = go;
   useEffect(() => {
     if (!show || !sessionId) return;
+    const query = settledQuery;
     if (!query.trim()) {
       setMatches([]);
       return;
@@ -97,16 +104,17 @@ export function FindBar() {
       stale = true;
       window.clearTimeout(t);
     };
-  }, [show, sessionId, query, activeScope, branchChoices, showHidden]);
+  }, [show, sessionId, settledQuery, activeScope, branchChoices, showHidden]);
 
   // Closing (or leaving the session) drops the persistent highlight and the text marks.
   useEffect(() => {
     if (!show) {
       setMatches([]);
+      setComposing(false);
       useUi.getState().setHighlight(null);
     }
   }, [show]);
-  useTextMarks(show ? query : "");
+  useTextMarks(show ? settledQuery : "");
 
   const step = (d: 1 | -1) => {
     if (!matches.length) return;
@@ -114,7 +122,7 @@ export function FindBar() {
   };
 
   if (!show) return null;
-  const none = query.trim() !== "" && matches.length === 0;
+  const none = settledQuery.trim() !== "" && matches.length === 0;
   return (
     <div
       data-testid="find"
@@ -129,7 +137,10 @@ export function FindBar() {
         placeholder={activeScope.kind === "main" ? "在对话中查找" : "在 Subagent 中查找"}
         aria-label="页内查找"
         onChange={(e) => useUi.getState().setFindQuery(e.target.value)}
+        onCompositionStart={() => setComposing(true)}
+        onCompositionEnd={() => setComposing(false)}
         onKeyDown={(e) => {
+          if (e.nativeEvent.isComposing) return;
           if (e.key === "Enter") {
             e.preventDefault();
             step(e.shiftKey ? -1 : 1);
@@ -147,7 +158,7 @@ export function FindBar() {
         className="h-7 min-w-0 max-w-80 flex-1 rounded-md border border-border bg-ground px-2.5 text-[13px] outline-none focus:border-accent"
       />
       <span data-testid="find-count" className="min-w-12 text-[12px] text-secondary tabular-nums">
-        {query.trim() === "" ? "" : none ? "无结果" : `${index + 1} / ${matches.length}`}
+        {settledQuery.trim() === "" ? "" : none ? "无结果" : `${index + 1} / ${matches.length}`}
       </span>
       <button type="button" aria-label="上一个" disabled={!matches.length} onClick={() => step(-1)} className={iconBtn}>
         <ChevronUp size={14} strokeWidth={1.8} aria-hidden />

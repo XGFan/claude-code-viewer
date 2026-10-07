@@ -135,6 +135,13 @@ pub enum PromptOrigin {
         status: Option<String>,
         summary: Option<String>,
     },
+    /// A message from another Claude session of an agent team
+    /// (`<teammate-message teammate_id="…" color="…" summary="…">`); not typed by the user.
+    Teammate {
+        teammate_id: Option<String>,
+        color: Option<String>,
+        summary: Option<String>,
+    },
     Meta,
 }
 

@@ -129,7 +129,10 @@ fn is_human_prompt(e: &Value) -> bool {
     };
     text.is_none_or(|t| {
         let t = t.trim_start();
-        !(t.starts_with("<local-command") || t.starts_with("<system-reminder"))
+        !(t.starts_with("<local-command")
+            || t.starts_with("<system-reminder")
+            || t.starts_with("<teammate-message")
+            || t.starts_with("Another Claude session sent a message:"))
     })
 }
 

@@ -54,8 +54,8 @@ type EventName = "sessionsChanged" | "liveChanged" | "indexStatus";
 declare global {
   interface Window {
     /** E2E hooks, installed only by the mock API. */
-    /** E2E spy: clipboard / Finder calls made through the mock API. */
-    __cvCalls?: Array<{ method: "copyText" | "revealSessionFile"; args: unknown[] }>;
+    /** E2E spy: clipboard / Finder calls and search queries (args: [query]) made through the mock API. */
+    __cvCalls?: Array<{ method: "copyText" | "revealSessionFile" | "search" | "findInSession"; args: unknown[] }>;
     __cvMock?: {
       emit(eventName: string, payload: unknown): void;
       setLive(sessionId: string, state: LiveState | null): void;
@@ -536,6 +536,7 @@ export function createMockApi(): Api {
     getImage: (req) => later(() => ({ mediaType: req.image.mediaType, dataBase64: TINY_PNG_BASE64 })),
     search: (req) =>
       later((): SearchResponse => {
+        calls.push({ method: "search", args: [req.query] });
         const groups = searchGroups({ ...req, maxSessions: req.maxSessions || 50 }, req.roles.length ? req.roles : DEFAULT_ROLES);
         return {
           groups,
@@ -577,7 +578,11 @@ export function createMockApi(): Api {
         return null;
       }),
     resolveJump: (req) => later(() => resolveJump(req)),
-    findInSession: (req) => later(() => findIn(req)),
+    findInSession: (req) =>
+      later(() => {
+        calls.push({ method: "findInSession", args: [req.query] });
+        return findIn(req);
+      }),
     revealSessionFile: (sessionId, agentId) =>
       later(() => {
         calls.push({ method: "revealSessionFile", args: [sessionId, agentId] });
