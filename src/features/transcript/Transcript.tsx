@@ -8,6 +8,7 @@ import { useUi } from "@/state/ui";
 import { anchorKey, buildRows, type GroupingInput, INHERITED_KEY, locate, rowIndexOf } from "./grouping";
 import { isContinuation, RowView } from "./nodes";
 import { clearScroll, type PendingScroll, scrollToNode, TranscriptContext, type TranscriptCtx, usePendingScroll } from "./nodes/scroll";
+import { resetReading, setCurrentTurn, setTurns, useReading } from "./reading";
 import { toolKey } from "./tools";
 
 export { scrollToNode, type ScrollRequest } from "./nodes/scroll";
@@ -158,19 +159,51 @@ export function TranscriptList({ transcript, ready, scope, follow = false, agent
     if (el) el.scrollTop = el.scrollHeight;
   }, []);
 
+  const isMain = scope.kind === "main";
+  // Outline / j-k support (main list only): which turn the reading line (55% down the viewport) is in.
+  const publishTurn = useCallback(() => {
+    const el = scrollRef.current;
+    if (!isMain || !el || useReading.getState().locked) return;
+    const probe = el.scrollTop + el.clientHeight * 0.55 - 20;
+    let turn = -1;
+    for (const v of virtualizer.getVirtualItems()) {
+      if (v.start > probe) break;
+      turn = rows[v.index]!.turn;
+    }
+    setCurrentTurn(turn);
+  }, [isMain, rows, virtualizer]);
+  const unlockTurn = useCallback(() => {
+    if (isMain && useReading.getState().locked) useReading.setState({ locked: false });
+  }, [isMain]);
+
   const onScroll = useCallback(() => {
     const el = scrollRef.current;
     if (!el) return;
+    publishTurn();
     const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight <= PIN_THRESHOLD;
     pinned.current = follow && atBottom;
     if (atBottom) setUnread(false);
-  }, [follow]);
+  }, [follow, publishTurn]);
+
+  useEffect(() => {
+    if (!isMain) return;
+    setTurns(
+      rows.flatMap((r) => {
+        if (r.kind !== "prompt") return [];
+        const o = r.body.origin;
+        const text = o.kind === "command" ? `/${o.name} ${o.args}` : r.body.text;
+        return [{ turn: r.turn, nodeId: r.node.id, text: text.replace(/\s+/g, " ").trim() }];
+      }),
+    );
+  }, [rows, isMain]);
+  useEffect(() => (isMain ? resetReading : undefined), [isMain]);
 
   // Stay at the bottom while content grows (new rows, late measurements) if the user was there.
   const total = virtualizer.getTotalSize();
   useLayoutEffect(() => {
     if (pinned.current) toBottom();
-  }, [total, toBottom]);
+    publishTurn();
+  }, [total, toBottom, publishTurn]);
 
   // New revision while the user reads elsewhere: offer a jump instead of moving the view.
   const firstRevision = useRef(true);
@@ -225,6 +258,9 @@ export function TranscriptList({ transcript, ready, scope, follow = false, agent
         <div
           ref={scrollRef}
           onScroll={onScroll}
+          onWheel={unlockTurn}
+          onPointerDown={unlockTurn}
+          onTouchStart={unlockTurn}
           data-testid={testId}
           data-scope={scope.kind === "main" ? "main" : scope.agentId}
           className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-6"

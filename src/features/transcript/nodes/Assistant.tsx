@@ -1,5 +1,6 @@
 import { ChevronDown, ChevronRight, CircleX } from "lucide-react";
 import type { ReactNode } from "react";
+import { CopyButton } from "@/components/ui/copy-button";
 import { Markdown } from "@/lib/markdown";
 import { useUi } from "@/state/ui";
 import { BranchSwitcher } from "../BranchSwitcher";
@@ -44,7 +45,8 @@ function segmentBody(row: AssistantRowData): ReactNode {
   switch (row.kind) {
     case "text":
       return row.text.trim() ? (
-        <Anchor nodeId={row.node.id} className="w-full">
+        <Anchor nodeId={row.node.id} className="group/copy relative w-full">
+          <CopyButton text={row.text} className="absolute -top-2 right-0 z-10 bg-ground/90" />
           <Markdown text={row.text} className="w-full" />
         </Anchor>
       ) : (

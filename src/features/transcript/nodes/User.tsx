@@ -1,4 +1,5 @@
 import { ArrowUp, Clock } from "lucide-react";
+import { CopyButton } from "@/components/ui/copy-button";
 import type { BranchPoint, Node } from "@/ipc/bindings";
 import { BranchSwitcher } from "../BranchSwitcher";
 import { ImageRefs } from "../tools";
@@ -20,9 +21,10 @@ export function UserPromptView({ node, body, branch }: { node: Node; body: UserB
     );
   }
   return (
-    <Anchor nodeId={node.id} className="flex flex-col items-end gap-1.5">
+    <Anchor nodeId={node.id} className="group/copy flex flex-col items-end gap-1.5">
       <div className="flex items-center gap-2 text-[11px] text-secondary">
         {branch && <BranchSwitcher point={branch} />}
+        <CopyButton text={o.kind === "command" ? `/${o.name} ${o.args}` : body.text} />
         <span>你 · {clock(node.timestampMs)}</span>
       </div>
       <div className="max-w-[640px] rounded-xl border border-selection bg-selection/50 px-3.5 py-2.5 break-words whitespace-pre-wrap">

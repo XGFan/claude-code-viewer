@@ -1,5 +1,6 @@
-import { Copy, Search } from "lucide-react";
+import { Copy, Ellipsis, FolderOpen, Search } from "lucide-react";
 import { Checkbox } from "@/components/ui/checkbox";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { api } from "@/ipc";
 import { cn } from "@/lib/cn";
 import { formatDuration, formatRelative, formatTokens } from "@/lib/format";
@@ -47,6 +48,28 @@ export function SessionHeader() {
           <Copy size={13} strokeWidth={1.5} aria-hidden />
           复制 resume 命令
         </button>
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <button
+              type="button"
+              data-testid="header-more"
+              aria-label="更多操作"
+              className="flex size-7 items-center justify-center rounded-md border border-border bg-ground hover:bg-selection"
+            >
+              <Ellipsis size={14} strokeWidth={1.6} aria-hidden />
+            </button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end">
+            <DropdownMenuItem onSelect={() => void api.copyText(d.summary.id)}>
+              <Copy size={13} strokeWidth={1.5} aria-hidden />
+              复制 Session ID
+            </DropdownMenuItem>
+            <DropdownMenuItem onSelect={() => void api.revealSessionFile(d.summary.id, null)}>
+              <FolderOpen size={13} strokeWidth={1.5} aria-hidden />
+              在 Finder 中显示
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
       </div>
       <div className="flex flex-wrap items-center gap-x-3.5 gap-y-0.5 text-[12px] text-secondary">
         <span data-testid="live-state" className={cn("flex items-center gap-1.5", live && "font-semibold text-live")}>

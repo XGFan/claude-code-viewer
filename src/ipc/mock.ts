@@ -54,6 +54,8 @@ type EventName = "sessionsChanged" | "liveChanged" | "indexStatus";
 declare global {
   interface Window {
     /** E2E hooks, installed only by the mock API. */
+    /** E2E spy: clipboard / Finder calls made through the mock API. */
+    __cvCalls?: Array<{ method: "copyText" | "revealSessionFile"; args: unknown[] }>;
     __cvMock?: {
       emit(eventName: string, payload: unknown): void;
       setLive(sessionId: string, state: LiveState | null): void;
@@ -492,6 +494,8 @@ export function createMockApi(): Api {
     }),
   });
 
+  const calls: NonNullable<Window["__cvCalls"]> = [];
+  window.__cvCalls = calls;
   window.__cvMock = {
     emit(eventName, payload) {
       const name = normalizeEventName(eventName);
@@ -574,13 +578,18 @@ export function createMockApi(): Api {
       }),
     resolveJump: (req) => later(() => resolveJump(req)),
     findInSession: (req) => later(() => findIn(req)),
-    revealSessionFile: () => later(() => null),
+    revealSessionFile: (sessionId, agentId) =>
+      later(() => {
+        calls.push({ method: "revealSessionFile", args: [sessionId, agentId] });
+        return null;
+      }),
     getStats: (req) => later(() => getStats(req)),
     getDiagnostics: () => later(() => diagnostics),
     onIndexStatus: (cb) => subscribe("indexStatus", cb),
     onSessionsChanged: (cb) => subscribe<SessionsChanged>("sessionsChanged", cb),
     onLiveChanged: (cb) => subscribe("liveChanged", cb),
     copyText: async (text) => {
+      calls.push({ method: "copyText", args: [text] });
       try {
         await navigator.clipboard.writeText(text);
       } catch {

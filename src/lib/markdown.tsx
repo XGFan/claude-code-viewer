@@ -1,6 +1,7 @@
 import type { ComponentProps } from "react";
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { CopyButton } from "@/components/ui/copy-button";
 import { cn } from "@/lib/cn";
 import { HighlightedCode } from "@/lib/shiki";
 
@@ -22,12 +23,19 @@ const components: Components = {
   ),
   th: (p) => <th className="border border-border bg-code px-2 py-1 text-left font-semibold" {...strip(p)} />,
   td: (p) => <td className="border border-border px-2 py-1" {...strip(p)} />,
-  pre: (p) => (
-    <pre
-      className="my-2 overflow-x-auto rounded-md bg-code px-3 py-2 font-mono text-[12px] leading-[1.55] whitespace-pre"
-      {...strip(p)}
-    />
-  ),
+  pre: ({ node, ...rest }) => {
+    const first = node?.children[0];
+    const raw = first && "children" in first ? first.children.map((c) => ("value" in c ? c.value : "")).join("") : "";
+    return (
+      <div className="group/copy relative my-2">
+        <pre
+          className="overflow-x-auto rounded-md bg-code px-3 py-2 font-mono text-[12px] leading-[1.55] whitespace-pre"
+          {...rest}
+        />
+        <CopyButton text={raw.replace(/\n$/, "")} className="absolute top-1.5 right-1.5 bg-code/90" />
+      </div>
+    );
+  },
   code: ({ className, children, node: _node, ...rest }) => {
     const lang = /language-([\w+#-]+)/.exec(className ?? "")?.[1] ?? null;
     const block = lang != null || String(children).includes("\n");

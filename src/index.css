@@ -68,3 +68,8 @@ body {
 #root {
   height: 100vh;
 }
+
+::highlight(cv-find) {
+  background-color: #ffd54a;
+  color: #1c1c1e;
+}

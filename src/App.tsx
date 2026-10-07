@@ -1,6 +1,8 @@
 import { useUi } from "@/state/ui";
 import { DiagnosticsPage } from "@/features/diagnostics";
 import { ProjectList, StatsEntry } from "@/features/projects";
+import { FindBar } from "@/features/find";
+import { Outline } from "@/features/outline";
 import { SearchOverlay } from "@/features/search";
 import { SessionHeader } from "@/features/header";
 import { SessionList } from "@/features/sessions";
@@ -41,9 +43,10 @@ export default function App() {
             <>
               {!sessionId && <div data-tauri-drag-region className="h-[52px] shrink-0" />}
               <SessionHeader />
-              {/* Later tasks mount FindBar / Outline (right gutter beside the transcript) / SubagentPanel here. */}
+              <FindBar />
               <div className="flex min-h-0 flex-1">
                 <TranscriptView />
+                <Outline />
                 <SubagentPanel />
               </div>
             </>
