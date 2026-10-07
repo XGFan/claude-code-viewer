@@ -8,7 +8,7 @@ export const commands = {
 	getAppInfo: () => __TAURI_INVOKE<AppInfo>("get_app_info"),
 	/**
 	 *  Persists the data root override (`None` resets to `$CLAUDE_CONFIG_DIR` / `~/.claude`), swaps
-	 *  the Engine and triggers a rescan. Not wired yet: the runtime (settings persistence, worker) owns it.
+	 *  the Engine and triggers a rescan.
 	 */
 	setDataRoot: (path: string | null) => __TAURI_INVOKE<AppInfo>("set_data_root", { path }),
 	getIndexStatus: () => __TAURI_INVOKE<IndexStatus>("get_index_status"),

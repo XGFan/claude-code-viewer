@@ -13,7 +13,9 @@ use cv_core::{CoreError, CoreResult, Engine};
 use tauri::ipc::Channel;
 use tauri::{AppHandle, Manager, State};
 
-use crate::state::AppState;
+use crate::settings::{self, Settings};
+use crate::state::{AppState, open_engine};
+use crate::worker::Job;
 
 type CmdResult<T> = Result<T, AppError>;
 
@@ -44,12 +46,30 @@ pub async fn get_app_info(state: State<'_, AppState>) -> CmdResult<AppInfo> {
 }
 
 /// Persists the data root override (`None` resets to `$CLAUDE_CONFIG_DIR` / `~/.claude`), swaps
-/// the Engine and triggers a rescan. Not wired yet: the runtime (settings persistence, worker) owns it.
+/// the Engine and triggers a rescan.
 #[tauri::command]
 #[specta::specta]
 pub async fn set_data_root(state: State<'_, AppState>, path: Option<String>) -> CmdResult<AppInfo> {
-    let _ = (state, path);
-    Err(CoreError::NotImplemented("set_data_root").into())
+    let path = path.map(|p| p.trim().to_owned()).filter(|p| !p.is_empty());
+    if let Some(p) = &path
+        && !std::path::Path::new(p).is_dir()
+    {
+        return Err(CoreError::InvalidQuery(format!("目录不存在：{p}")).into());
+    }
+    let settings = Settings { data_root: path };
+    let engine = tauri::async_runtime::spawn_blocking(move || {
+        let engine = open_engine(&settings)?;
+        settings::save(&settings)?;
+        Ok::<_, CoreError>(engine)
+    })
+    .await
+    .map_err(internal)?
+    .map_err(AppError::from)?;
+    let info = engine.app_info();
+    state.cancel_all_searches();
+    *state.engine.write() = Arc::new(engine);
+    state.jobs.send(Job::SetRoot);
+    Ok(info)
 }
 
 #[tauri::command]
@@ -61,7 +81,8 @@ pub async fn get_index_status(state: State<'_, AppState>) -> CmdResult<IndexStat
 #[tauri::command]
 #[specta::specta]
 pub async fn rebuild_index(state: State<'_, AppState>) -> CmdResult<()> {
-    with_engine(&state, |e| e.rebuild()).await
+    state.jobs.send(Job::Rebuild);
+    Ok(())
 }
 
 #[tauri::command]

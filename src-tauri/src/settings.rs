@@ -24,3 +24,14 @@ pub fn load() -> Settings {
         .and_then(|bytes| serde_json::from_slice(&bytes).ok())
         .unwrap_or_default()
 }
+
+/// Writes atomically (temp file + rename) so a crash never leaves a half-written file.
+pub fn save(settings: &Settings) -> std::io::Result<()> {
+    let path = settings_path();
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir)?;
+    }
+    let tmp = path.with_extension("json.tmp");
+    std::fs::write(&tmp, serde_json::to_vec_pretty(settings)?)?;
+    std::fs::rename(tmp, path)
+}

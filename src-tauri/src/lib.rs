@@ -7,14 +7,11 @@ pub mod state;
 pub mod watcher;
 pub mod worker;
 
-use std::path::Path;
-
-use cv_core::{Engine, EngineConfig, paths};
 use tauri::Manager;
 use tauri_specta::{Builder, ErrorHandlingMode, collect_commands, collect_events};
 
 use crate::events::{IndexStatusEvent, LiveChangedEvent, SessionsChangedEvent};
-use crate::state::AppState;
+use crate::state::{AppState, open_engine};
 
 /// The single source of commands and events, shared by the app and the bindings export.
 pub fn specta_builder() -> Builder<tauri::Wry> {
@@ -47,17 +44,10 @@ pub fn specta_builder() -> Builder<tauri::Wry> {
         .error_handling(ErrorHandlingMode::Throw)
 }
 
-fn open_engine() -> Result<Engine, cv_core::CoreError> {
-    let settings = settings::load();
-    let root = paths::resolve_data_root(settings.data_root.as_deref().map(Path::new));
-    Engine::open(EngineConfig {
-        data_root: root.path,
-        data_root_source: root.source,
-        cache_dir: paths::default_cache_dir(),
-    })
-}
-
 pub fn run() {
+    let _ = tracing_subscriber::fmt()
+        .with_max_level(tracing::Level::INFO)
+        .try_init();
     let builder = specta_builder();
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
@@ -65,7 +55,11 @@ pub fn run() {
         .invoke_handler(builder.invoke_handler())
         .setup(move |app| {
             builder.mount_events(app);
-            app.manage(AppState::new(open_engine()?));
+            let (jobs, rx, backlog_cancel) = worker::channel();
+            app.manage(AppState::new(open_engine(&settings::load())?, jobs.clone()));
+            worker::spawn(app.handle().clone(), rx, jobs.clone(), backlog_cancel);
+            // Starts the watcher, then FullScan -> TextBacklog.
+            jobs.send(worker::Job::SetRoot);
             Ok(())
         })
         .run(tauri::generate_context!())
