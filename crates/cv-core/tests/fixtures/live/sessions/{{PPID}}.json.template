@@ -1,0 +1,1 @@
+{"pid":{{PPID}},"sessionId":"45470335-35d2-5185-ad2c-5f6ca8463a06","cwd":"/Users/dev/code/orbit-web","startedAt":1791365698169,"procStart":"{{PPID_START}}","version":"2.1.292","peerProtocol":1,"kind":"interactive","entrypoint":"cli","pidDomain":"darwin","name":"orbit-web-2","nameSource":"derived","status":"shell","updatedAt":1791369977725,"statusUpdatedAt":1791369977725}
