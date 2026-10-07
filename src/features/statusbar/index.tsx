@@ -7,7 +7,12 @@ export function StatusBar() {
   if (!s) return <div className="border-t border-border bg-sidebar" />;
 
   const busy = s.phase === "scanning" || s.phase === "indexingText";
-  const pct = s.filesTotal > 0 ? Math.min(100, (s.filesDone / s.filesTotal) * 100) : 0;
+  const pct =
+    s.bytesTotal > 0
+      ? Math.min(100, (s.bytesDone / s.bytesTotal) * 100)
+      : s.filesTotal > 0
+        ? Math.min(100, (s.filesDone / s.filesTotal) * 100)
+        : 0;
   return (
     <div
       data-testid="statusbar"
@@ -17,7 +22,7 @@ export function StatusBar() {
         <span className="text-error">索引失败{s.error ? ` · ${s.error}` : ""}</span>
       ) : busy ? (
         <>
-          <span>{s.phase === "scanning" ? "正在扫描" : "正在建立搜索索引"}</span>
+          <span>{s.phase === "scanning" ? "正在扫描" : "正在建立全文索引"}</span>
           <span className="tabular-nums">
             {nf.format(s.filesDone)} / {nf.format(s.filesTotal)} 个文件
           </span>
@@ -34,7 +39,6 @@ export function StatusBar() {
       ) : (
         <span>已索引 {nf.format(s.sessionsTotal)} 个 Session</span>
       )}
-      {!s.textReady && <span>搜索结果可能不完整</span>}
     </div>
   );
 }

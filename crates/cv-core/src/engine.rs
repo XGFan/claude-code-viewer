@@ -145,24 +145,29 @@ impl Engine {
         cancel: &AtomicBool,
     ) -> CoreResult<()> {
         let _g = self.sync_lock.lock();
-        self.set_status(|s| s.phase = IndexPhase::IndexingText, p);
         let mut main_set = |sid: &str| self.main_set_of(sid).unwrap_or_default();
-        let progress = |done: u64, total: u64| {
+        // files/bytes done/total describe the text backlog while the phase is IndexingText.
+        let progress = |c: text::TextProgress| {
             self.set_status(
                 |s| {
-                    s.bytes_done = done as f64;
-                    s.bytes_total = total as f64;
+                    s.phase = IndexPhase::IndexingText;
+                    s.files_done = c.files_done;
+                    s.files_total = c.files_total;
+                    s.bytes_done = c.bytes_done as f64;
+                    s.bytes_total = c.bytes_total as f64;
                 },
                 p,
             );
         };
-        let res = self
-            .index
-            .write(|conn| text::index_pending(conn, &mut main_set, &progress, cancel));
+        let res = self.index.write(|conn| {
+            text::index_pending(conn, &mut main_set, &progress, cancel, text::BATCH_BYTES)
+        });
         let ready = self.index.read(reader::text_ready).unwrap_or(false);
         self.set_status(
             |s| {
                 s.phase = match &res {
+                    // Yielded to another job; the worker resumes the backlog afterwards.
+                    Err(CoreError::Cancelled) if !ready => IndexPhase::IndexingText,
                     Err(e) if !matches!(e, CoreError::NotImplemented(_) | CoreError::Cancelled) => {
                         IndexPhase::Error
                     }
@@ -1585,6 +1590,81 @@ mod tests {
         assert!(!info.data_root_exists);
         assert_eq!(info.schema_version, SCHEMA_VERSION);
         assert_eq!(engine.scan_all(&|_| {}).unwrap(), ChangeSet::default());
+    }
+
+    #[test]
+    fn text_backlog_commits_before_yielding_and_reports_its_own_progress() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/subagents");
+        let tmp = tempfile::tempdir().unwrap();
+        let engine = Engine::open(EngineConfig {
+            data_root: root,
+            data_root_source: DataRootSource::Settings,
+            cache_dir: tmp.path().to_path_buf(),
+        })
+        .unwrap();
+        engine.scan_all(&|_| {}).unwrap();
+        let counts = |e: &Engine| {
+            e.index
+                .read(|c| {
+                    Ok(c.query_row(
+                        "SELECT (SELECT count(*) FROM msg_text),
+                                (SELECT count(*) FROM files WHERE text_offset >= parsed_offset),
+                                (SELECT count(*) FROM files)",
+                        [],
+                        |r| {
+                            Ok((
+                                r.get::<_, u32>(0)?,
+                                r.get::<_, u32>(1)?,
+                                r.get::<_, u32>(2)?,
+                            ))
+                        },
+                    )?)
+                })
+                .unwrap()
+        };
+        let (rows, done, files) = counts(&engine);
+        assert_eq!((rows, done), (0, 0));
+        assert!(files > 2);
+
+        // Asked to yield before starting, with one file per transaction: exactly one commits.
+        let seen = Mutex::new(Vec::new());
+        let res = engine.index.write(|conn| {
+            text::index_pending(
+                conn,
+                &mut |_| HashSet::new(),
+                &|c| seen.lock().push(c),
+                &AtomicBool::new(true),
+                1,
+            )
+        });
+        assert!(matches!(res, Err(CoreError::Cancelled)));
+        let (rows, done, _) = counts(&engine);
+        assert!(rows > 0, "the first transaction committed");
+        assert_eq!(done, 1);
+        let seen = seen.into_inner();
+        assert_eq!(seen.len(), 2);
+        assert_eq!((seen[0].files_done, seen[0].files_total), (0, files));
+        assert_eq!((seen[1].files_done, seen[1].files_total), (1, files));
+        assert!(seen[1].bytes_done > 0 && seen[1].bytes_done < seen[1].bytes_total);
+
+        // The resumed backlog reports phase-2 progress over all files and finishes.
+        let statuses = Mutex::new(Vec::new());
+        engine
+            .index_text_backlog(
+                &|s| statuses.lock().push(s.clone()),
+                &AtomicBool::new(false),
+            )
+            .unwrap();
+        let statuses = statuses.into_inner();
+        let first = &statuses[0];
+        assert_eq!(first.phase, IndexPhase::IndexingText);
+        assert_eq!((first.files_done, first.files_total), (1, files));
+        let last = statuses.last().unwrap();
+        assert_eq!(last.phase, IndexPhase::Idle);
+        assert!(last.text_ready);
+        assert_eq!((last.files_done, last.files_total), (files, files));
+        assert_eq!(last.bytes_done, last.bytes_total);
+        assert_eq!(counts(&engine).1, files);
     }
 
     #[test]

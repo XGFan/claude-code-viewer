@@ -6,7 +6,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
-use crossbeam_channel::{Receiver, Sender};
+use crossbeam_channel::{Receiver, Sender, TryRecvError};
 use cv_core::model::{IndexStatus, SessionsChanged};
 use cv_core::{ChangeSet, CoreError, Engine, paths};
 use parking_lot::Mutex;
@@ -27,7 +27,8 @@ pub enum Job {
     FullScan,
     /// Debounced filesystem batch (paths under `<root>/projects` or `<root>/sessions`).
     Fs(Vec<PathBuf>),
-    /// Full-text backlog; yields to any other queued job between transactions.
+    /// Requests the full-text backlog. Requests coalesce; the backlog runs whenever no other job
+    /// is queued and yields to any other job between transactions (A14b).
     TextBacklog,
     Rebuild,
     /// The Engine was swapped: restart the watcher and rescan.
@@ -37,7 +38,8 @@ pub enum Job {
     Rescan,
 }
 
-/// Queues jobs; any job except `TextBacklog` also asks a running backlog to yield.
+/// Queues jobs; any job except `TextBacklog` also asks a running backlog to yield (after its
+/// current transaction commits).
 #[derive(Clone)]
 pub struct JobSender {
     tx: Sender<Job>,
@@ -93,7 +95,7 @@ pub fn spawn(app: AppHandle, rx: Receiver<Job>, jobs: JobSender, backlog_cancel:
         .spawn(move || {
             Worker {
                 app,
-                rx,
+                queue: Queue::new(rx, backlog_cancel.clone()),
                 jobs,
                 backlog_cancel,
                 watcher: None,
@@ -104,9 +106,56 @@ pub fn spawn(app: AppHandle, rx: Receiver<Job>, jobs: JobSender, backlog_cancel:
         .expect("spawn worker thread");
 }
 
+/// What the worker does next.
+#[derive(Debug)]
+enum Step {
+    Job(Job),
+    Backlog,
+}
+
+/// The job queue plus the coalesced text-backlog request. Queued jobs always go first; the
+/// backlog runs only when the queue is empty and stays requested until it completes.
+struct Queue {
+    rx: Receiver<Job>,
+    backlog_cancel: Arc<AtomicBool>,
+    backlog: bool,
+}
+
+impl Queue {
+    fn new(rx: Receiver<Job>, backlog_cancel: Arc<AtomicBool>) -> Self {
+        Queue {
+            rx,
+            backlog_cancel,
+            backlog: false,
+        }
+    }
+
+    /// Blocks for the next step; `None` once every sender is gone.
+    fn next(&mut self) -> Option<Step> {
+        loop {
+            if self.backlog {
+                // Cleared before looking at the queue: any job sent from here on raises it again,
+                // so a running backlog yields to it.
+                self.backlog_cancel.store(false, Ordering::Relaxed);
+                match self.rx.try_recv() {
+                    Ok(Job::TextBacklog) => continue,
+                    Ok(job) => return Some(Step::Job(job)),
+                    Err(TryRecvError::Empty) => return Some(Step::Backlog),
+                    Err(TryRecvError::Disconnected) => return None,
+                }
+            }
+            match self.rx.recv() {
+                Ok(Job::TextBacklog) => self.backlog = true,
+                Ok(job) => return Some(Step::Job(job)),
+                Err(_) => return None,
+            }
+        }
+    }
+}
+
 struct Worker {
     app: AppHandle,
-    rx: Receiver<Job>,
+    queue: Queue,
     jobs: JobSender,
     backlog_cancel: Arc<AtomicBool>,
     watcher: Option<Watcher>,
@@ -125,8 +174,15 @@ fn log_err(op: &str, e: &CoreError) {
 
 impl Worker {
     fn run(mut self) {
-        while let Ok(job) = self.rx.recv() {
+        while let Some(step) = self.queue.next() {
             let engine = self.app.state::<AppState>().engine();
+            let job = match step {
+                Step::Backlog => {
+                    self.queue.backlog = self.text_backlog(&engine);
+                    continue;
+                }
+                Step::Job(job) => job,
+            };
             match job {
                 Job::SetRoot | Job::Rescan => {
                     self.restart_watcher(&engine);
@@ -134,7 +190,8 @@ impl Worker {
                 }
                 Job::FullScan => self.full_scan(&engine),
                 Job::Fs(paths) => self.fs_batch(&engine, &paths),
-                Job::TextBacklog => self.text_backlog(&engine),
+                // `Queue::next` absorbs backlog requests; kept for exhaustiveness.
+                Job::TextBacklog => self.queue.backlog = true,
                 Job::Rebuild => {
                     if let Err(e) = engine.rebuild() {
                         log_err("rebuild", &e);
@@ -241,29 +298,63 @@ impl Worker {
         }
     }
 
-    /// Runs the backlog until done; yields (and requeues itself) when another job arrives.
-    fn text_backlog(&self, engine: &Engine) {
-        if !self.rx.is_empty() {
-            // Other jobs first; they were queued ahead of this one.
-            self.jobs.send(Job::TextBacklog);
-            return;
-        }
-        self.backlog_cancel.store(false, Ordering::Relaxed);
+    /// Runs the backlog until done or until another job is queued (it yields after the current
+    /// transaction). Returns whether the backlog is still wanted.
+    fn text_backlog(&self, engine: &Engine) -> bool {
         let result = engine.index_text_backlog(&self.progress(), &self.backlog_cancel);
-        let yielded = self.backlog_cancel.load(Ordering::Relaxed);
+        self.emit_status(engine.index_status());
         match result {
-            Ok(()) | Err(CoreError::Cancelled) => {
-                let status = engine.index_status();
-                let done = status.text_ready;
-                self.emit_status(status);
-                if yielded && !done {
-                    self.jobs.send(Job::TextBacklog);
-                }
-            }
+            Ok(()) => false,
+            Err(CoreError::Cancelled) => true,
             Err(e) => {
                 log_err("index_text_backlog", &e);
                 self.emit_error(engine, &e);
+                false
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn queue() -> (JobSender, Queue) {
+        let (jobs, rx, cancel) = channel();
+        (jobs, Queue::new(rx, cancel))
+    }
+
+    #[test]
+    fn backlog_requests_coalesce_and_run_after_queued_jobs() {
+        let (jobs, mut q) = queue();
+        // Two backlog requests used to requeue each other forever (worker livelock).
+        jobs.send(Job::TextBacklog);
+        jobs.send(Job::TextBacklog);
+        jobs.send(Job::PollLive);
+        jobs.send(Job::TextBacklog);
+        assert!(matches!(q.next(), Some(Step::Job(Job::PollLive))));
+        assert!(matches!(q.next(), Some(Step::Backlog)));
+        assert!(q.rx.is_empty());
+    }
+
+    #[test]
+    fn backlog_yields_to_new_jobs_and_resumes() {
+        let (jobs, mut q) = queue();
+        jobs.send(Job::TextBacklog);
+        assert!(matches!(q.next(), Some(Step::Backlog)));
+        assert!(!q.backlog_cancel.load(Ordering::Relaxed));
+        // A poll arriving while the backlog runs asks it to yield.
+        jobs.send(Job::PollLive);
+        assert!(q.backlog_cancel.load(Ordering::Relaxed));
+        // The backlog yielded (still wanted): the poll runs first, then the backlog resumes.
+        assert!(matches!(q.next(), Some(Step::Job(Job::PollLive))));
+        assert!(matches!(q.next(), Some(Step::Backlog)));
+        assert!(!q.backlog_cancel.load(Ordering::Relaxed));
+        // Completed: the queue blocks again until the next job.
+        q.backlog = false;
+        jobs.send(Job::Rescan);
+        assert!(matches!(q.next(), Some(Step::Job(Job::Rescan))));
+        drop(jobs);
+        assert!(q.next().is_none());
     }
 }

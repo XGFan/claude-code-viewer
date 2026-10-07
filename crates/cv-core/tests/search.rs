@@ -512,7 +512,7 @@ fn append_makes_new_text_searchable_including_cjk_and_quotes() {
 }
 
 #[test]
-fn backlog_honours_cancel_and_resumes() {
+fn backlog_commits_a_transaction_even_when_asked_to_yield() {
     let root = fixture_root("basic");
     let cache = tempfile::tempdir().unwrap();
     let engine = Engine::open(EngineConfig {
@@ -522,12 +522,12 @@ fn backlog_honours_cancel_and_resumes() {
     })
     .unwrap();
     engine.scan_all(&|_| {}).unwrap();
-    let cancelled = engine.index_text_backlog(&|_| {}, &AtomicBool::new(true));
-    assert!(cancelled.is_err());
     let r = engine.search(&req("retry")).unwrap();
     assert!(!r.index_complete && r.total_hits == 0);
+    // A yield request is honoured only after a commit, so the backlog never starves; the
+    // fixture fits in one transaction, so it completes.
     engine
-        .index_text_backlog(&|_| {}, &AtomicBool::new(false))
+        .index_text_backlog(&|_| {}, &AtomicBool::new(true))
         .unwrap();
     let r = engine.search(&req("retry")).unwrap();
     assert!(r.index_complete && r.total_hits > 0);

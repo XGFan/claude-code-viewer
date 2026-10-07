@@ -156,18 +156,31 @@ struct Pending {
     to: u64,
 }
 
+/// Phase-2 coverage over every `files` row: a file is done when `text_offset >= parsed_offset`.
+/// Totals stay stable while a backlog is interrupted and resumed.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct TextProgress {
+    pub files_done: u32,
+    pub files_total: u32,
+    pub bytes_done: u64,
+    pub bytes_total: u64,
+}
+
 /// Indexes `[text_offset, parsed_offset)` of every file with a backlog. `main_set` returns the
 /// Main Line uuid set of a session (A2) so `on_main_line` is set at insert time; `progress`
-/// receives (bytes done, bytes total).
+/// receives the coverage after every transaction.
 ///
-/// Files are parsed in parallel and written in transactions of about [`BATCH_BYTES`] source
-/// bytes; `cancel` is checked between transactions (`Err(Cancelled)` leaves the rest pending).
-/// Rows use `ON CONFLICT DO NOTHING` (A7), so copies of a Session index each uuid once.
+/// Files are parsed in parallel and written in transactions of about `batch_bytes` source bytes
+/// ([`BATCH_BYTES`] in the app). `cancel` is checked only after a transaction has committed, so
+/// every call makes forward progress even when it is asked to yield right away; `Err(Cancelled)`
+/// leaves the rest pending. Rows use `ON CONFLICT DO NOTHING` (A7), so copies of a Session index
+/// each uuid once.
 pub fn index_pending(
     conn: &mut Connection,
     main_set: &mut dyn FnMut(&str) -> HashSet<String>,
-    progress: &dyn Fn(u64, u64),
+    progress: &dyn Fn(TextProgress),
     cancel: &AtomicBool,
+    batch_bytes: u64,
 ) -> CoreResult<()> {
     let pending = {
         let mut st = conn.prepare(
@@ -187,17 +200,13 @@ pub fn index_pending(
         })?;
         rows.collect::<Result<Vec<_>, _>>()?
     };
-    let total: u64 = pending.iter().map(|p| p.to - p.from).sum();
-    let mut done = 0u64;
-    progress(done, total);
+    let mut cov = coverage(conn)?;
+    progress(cov);
     let mut rest = pending.as_slice();
     while !rest.is_empty() {
-        if cancel.load(Ordering::Relaxed) {
-            return Err(CoreError::Cancelled);
-        }
         let mut n = 0;
         let mut bytes = 0u64;
-        while n < rest.len() && (n == 0 || bytes < BATCH_BYTES) {
+        while n < rest.len() && (n == 0 || bytes < batch_bytes) {
             bytes += rest[n].to - rest[n].from;
             n += 1;
         }
@@ -239,10 +248,31 @@ pub fn index_pending(
             }
         }
         tx.commit()?;
-        done += bytes;
-        progress(done, total);
+        cov.files_done += n as u32;
+        cov.bytes_done += bytes;
+        progress(cov);
+        if !rest.is_empty() && cancel.load(Ordering::Relaxed) {
+            return Err(CoreError::Cancelled);
+        }
     }
     Ok(())
+}
+
+fn coverage(conn: &Connection) -> CoreResult<TextProgress> {
+    Ok(conn.query_row(
+        "SELECT count(*), coalesce(sum(text_offset >= parsed_offset), 0),
+                coalesce(sum(parsed_offset), 0), coalesce(sum(min(text_offset, parsed_offset)), 0)
+         FROM files",
+        [],
+        |r| {
+            Ok(TextProgress {
+                files_total: r.get(0)?,
+                files_done: r.get(1)?,
+                bytes_total: r.get::<_, i64>(2)? as u64,
+                bytes_done: r.get::<_, i64>(3)? as u64,
+            })
+        },
+    )?)
 }
 
 /// Reads `[from, to)` of a pending file and extracts its documents. An unreadable file yields
