@@ -3,7 +3,9 @@ import { Markdown } from "@/lib/markdown";
 import { cn } from "@/lib/cn";
 import type { Node } from "@/ipc/bindings";
 import { useUi } from "@/state/ui";
+import { formatTokens } from "@/lib/format";
 import { clock, prettyJson } from "../util";
+import { Anchor } from "./Anchor";
 
 type Body<K extends Node["body"]["kind"]> = Extract<Node["body"], { kind: K }>;
 
@@ -26,14 +28,34 @@ export function AttachmentLine({ body }: { body: Body<"attachment"> }) {
   );
 }
 
-export function CompactDivider({ node }: { node: Node }) {
+/** Compact boundary divider; when the summary follows it, "查看摘要" expands it below the line. */
+export function CompactRow({ boundary, summary }: { boundary: Node; summary: Node | null }) {
+  const key = summary ? `compact:${summary.id}` : "";
+  const open = useUi((s) => (summary ? (s.expanded[key] ?? false) : false));
+  const toggle = useUi((s) => s.toggleExpanded);
+  const pre = boundary.body.kind === "compactBoundary" ? boundary.body.preTokens : null;
   return (
-    <div className="flex items-center gap-2.5 text-[12px] text-secondary">
-      <span className="h-px flex-1 bg-border" />
-      <Minimize2 size={13} strokeWidth={1.5} aria-hidden />
-      <span>上下文已压缩 · {clock(node.timestampMs)}</span>
-      <span className="h-px flex-1 bg-border" />
-    </div>
+    <Anchor nodeId={boundary.id} className="flex flex-col gap-2">
+      <div data-testid="compact-divider" className="flex items-center gap-2.5 text-[12px] text-secondary">
+        <span className="h-px flex-1 bg-border" />
+        <Minimize2 size={13} strokeWidth={1.5} aria-hidden />
+        <span>
+          上下文已压缩 · {clock(boundary.timestampMs)}
+          {pre != null && <span> · 压缩前 {formatTokens(pre)}</span>}
+        </span>
+        {summary && (
+          <button type="button" aria-expanded={open} onClick={() => toggle(key)} className="text-accent hover:underline">
+            {open ? "收起摘要" : "查看摘要"}
+          </button>
+        )}
+        <span className="h-px flex-1 bg-border" />
+      </div>
+      {summary && open && summary.body.kind === "compactSummary" && (
+        <Anchor nodeId={summary.id}>
+          <Markdown text={summary.body.text} className="rounded-lg border border-border bg-list px-3 py-2 text-[12px]" />
+        </Anchor>
+      )}
+    </Anchor>
   );
 }
 
@@ -42,7 +64,7 @@ export function CompactSummaryCard({ node, body }: { node: Node; body: Body<"com
   const open = useUi((s) => s.expanded[key] ?? false);
   const toggle = useUi((s) => s.toggleExpanded);
   return (
-    <div className="overflow-hidden rounded-lg border border-border">
+    <Anchor nodeId={node.id} className="overflow-hidden rounded-lg border border-border">
       <button
         type="button"
         aria-expanded={open}
@@ -53,7 +75,7 @@ export function CompactSummaryCard({ node, body }: { node: Node; body: Body<"com
         <span className="font-semibold">上下文摘要</span>
       </button>
       {open && <Markdown text={body.text} className="border-t border-border px-3 py-2 text-[12px]" />}
-    </div>
+    </Anchor>
   );
 }
 

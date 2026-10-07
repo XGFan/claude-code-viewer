@@ -1,0 +1,159 @@
+import { describe, expect, it } from "vitest";
+import type { Node, SubagentRun } from "@/ipc/bindings";
+import { asstNode, call, otherNode, text, thinking, userNode } from "@/mocks/data/builders";
+import { richMain, richSubagents, richWorkflows } from "@/mocks/data/rich";
+import { buildRows, type GroupingInput, locate, rowIndexOf, type Row } from "./grouping";
+
+const ok = (t = "ok") => ({ text: t });
+const input = (nodes: Node[], o: Partial<GroupingInput> = {}): GroupingInput => ({
+  nodes,
+  branchPoints: [],
+  subagents: [],
+  workflows: [],
+  inherited: null,
+  orphanSubagentIds: [],
+  showHidden: false,
+  inheritedExpanded: false,
+  ...o,
+});
+const kinds = (rows: Row[]) => rows.map((r) => r.kind);
+const groups = (rows: Row[]) => rows.filter((r): r is Extract<Row, { kind: "group" }> => r.kind === "group");
+
+describe("tool-call groups", () => {
+  it("merges consecutive calls across assistant messages and splits on assistant text", () => {
+    const { rows } = buildRows(
+      input([
+        userNode("u1", 1, "go"),
+        asstNode("a1", 2, [text("look"), call("t1", "Bash", {}, ok()), call("t2", "Read", {}, ok())]),
+        asstNode("a2", 3, [call("t3", "Bash", {}, ok())]),
+        asstNode("a3", 4, [text("now edit"), call("t4", "Edit", {}, ok())]),
+      ]),
+    );
+    expect(kinds(rows)).toEqual(["prompt", "text", "group", "text", "tool"]);
+    const [g] = groups(rows);
+    expect(g!.callCount).toBe(3);
+    expect(g!.counts).toEqual([
+      ["Bash", 2],
+      ["Read", 1],
+    ]);
+    expect(g!.key).toBe("group:a1|t1");
+    // Only the first row of the run carries the role line.
+    expect(rows.filter((r) => "role" in r && r.role).length).toBe(1);
+  });
+
+  it("a human prompt starts a new turn and ends the group", () => {
+    const { rows } = buildRows(
+      input([
+        userNode("u1", 1, "a"),
+        asstNode("a1", 2, [call("t1", "Bash", {}, ok()), call("t2", "Bash", {}, ok())]),
+        userNode("u2", 3, "b"),
+        asstNode("a2", 4, [call("t3", "Bash", {}, ok()), call("t4", "Bash", {}, ok())]),
+      ]),
+    );
+    expect(kinds(rows)).toEqual(["prompt", "group", "prompt", "group"]);
+    expect(rows.map((r) => r.turn)).toEqual([0, 0, 1, 1]);
+  });
+
+  it("thinking between calls stays inside the group; leading thinking stands alone", () => {
+    const { rows } = buildRows(
+      input([
+        asstNode("a1", 1, [thinking("plan"), call("t1", "Bash", {}, ok())]),
+        asstNode("a2", 2, [thinking("hmm"), call("t2", "Read", {}, ok())]),
+      ]),
+    );
+    expect(kinds(rows)).toEqual(["thinking", "group"]);
+    expect(groups(rows)[0]!.items.map((i) => i.type)).toEqual(["call", "thinking", "call"]);
+  });
+
+  it("counts failed calls so the group opens by default", () => {
+    const rich = buildRows(input(richMain, { subagents: richSubagents, workflows: richWorkflows }));
+    const failedGroup = groups(rich.rows).find((g) => g.items.some((i) => i.type === "call" && i.call.toolUseId === "tu_bash_fail"));
+    expect(failedGroup?.failedCount).toBe(1);
+    expect(groups(rich.rows).filter((g) => g !== failedGroup).every((g) => g.failedCount === 0)).toBe(true);
+  });
+});
+
+describe("subagent and workflow cards", () => {
+  const rich = buildRows(input(richMain, { subagents: richSubagents, workflows: richWorkflows, orphanSubagentIds: ["ag-orphan"] }));
+
+  it("groups parallel Agent calls of one message and renders the workflow as its own card", () => {
+    const par = rich.rows.find((r): r is Extract<Row, { kind: "parallel" }> => r.kind === "parallel");
+    expect(par?.cards.map((c) => c.run.agentId)).toEqual(["ag-sync1", "ag-async1"]);
+    const wfAt = rich.rows.findIndex((r) => r.kind === "workflow");
+    expect(rich.rows[wfAt - 1]).toBe(par);
+    expect(rich.rows[wfAt + 1]).toMatchObject({ kind: "tool", call: { toolUseId: "tu_mcp" } });
+  });
+
+  it("links the task notification and lists orphans at the end", () => {
+    expect(rich.rows.find((r) => r.kind === "notification")?.key).toBe("n-notify");
+    expect(rich.toolNode.get("tu_agent_tests")).toBe("n12");
+    expect(kinds(rich.rows).slice(-2)).toEqual(["orphanHeader", "orphan"]);
+  });
+
+  it("an Agent call without a linked run renders as a plain tool call", () => {
+    const { rows } = buildRows(input([asstNode("a1", 1, [call("t1", "Agent", { prompt: "x" }, ok(), { subagentId: "missing" })])]));
+    expect(kinds(rows)).toEqual(["tool"]);
+  });
+
+  it("subagent scope shows the task prompt card and the final result", () => {
+    const agent: SubagentRun = richSubagents[0]!;
+    const { rows } = buildRows(
+      input([userNode("s-u1", 1, "task"), asstNode("s-a1", 2, [text("done")])], { agent }),
+    );
+    expect(kinds(rows)).toEqual(["taskPrompt", "text", "finalResult"]);
+  });
+});
+
+describe("compact and hidden", () => {
+  it("merges the compact boundary with the following summary", () => {
+    const { rows, compactKeyOf } = buildRows(input(richMain));
+    const c = rows.find((r) => r.kind === "compact");
+    expect(c).toMatchObject({ boundary: { id: "n-cb" }, summary: { id: "n-cs" } });
+    expect(compactKeyOf.get("n-cs")).toBe("compact:n-cs");
+  });
+
+  it("skips hidden nodes unless shown", () => {
+    const nodes = [userNode("u1", 1, "a"), otherNode("h1", 2, { kind: "attachment", attachmentType: "x", text: "t" }, { hidden: true })];
+    expect(buildRows(input(nodes)).rows).toHaveLength(1);
+    expect(buildRows(input(nodes, { showHidden: true })).rows).toHaveLength(2);
+  });
+});
+
+describe("fork-inherited prefix", () => {
+  const nodes = [
+    userNode("i1", 1, "old", { inherited: true }),
+    asstNode("i2", 2, [call("ti1", "Bash", {}, ok()), call("ti2", "Bash", {}, ok())], { inherited: true }),
+    userNode("n1", 3, "new"),
+    asstNode("n2", 4, [text("reply")]),
+  ];
+  const range = { originSessionId: "origin", originTitle: "Origin", lastInheritedId: "i2", count: 2 };
+
+  it("collapses into a banner followed by the new-content divider", () => {
+    const g = buildRows(input(nodes, { inherited: range }));
+    expect(kinds(g.rows)).toEqual(["inheritedBanner", "inheritedDivider", "prompt", "text"]);
+    expect(g.rows[0]).toMatchObject({ count: 2, expanded: false });
+    expect(rowIndexOf(g, "i2", "ti1")).toBe(0);
+  });
+
+  it("expands in place between banner and divider", () => {
+    const g = buildRows(input(nodes, { inherited: range, inheritedExpanded: true }));
+    expect(kinds(g.rows)).toEqual(["inheritedBanner", "prompt", "group", "inheritedDivider", "prompt", "text"]);
+  });
+
+  it("locate returns the keys that reveal a call inside the collapsed prefix", () => {
+    const full = buildRows(input(nodes, { inherited: range, inheritedExpanded: true }));
+    expect(locate(full, "i2", "ti2")?.expand).toEqual(["inherited", "group:i2|ti1", "tool:i2|ti2"]);
+    expect(locate(full, "nope")).toBeNull();
+  });
+});
+
+describe("branch heads", () => {
+  it("attaches the branch point to the selected head prompt and to assistant heads", () => {
+    const bp = (head: string) => ({ anchorKey: "x", selectedHeadId: head, options: [] });
+    const nodes = [userNode("u1", 1, "a"), asstNode("a1", 2, [text("r1")]), asstNode("a2", 3, [text("r2")])];
+    const { rows } = buildRows(input(nodes, { branchPoints: [bp("u1"), bp("a2")] }));
+    expect(rows[0]).toMatchObject({ kind: "prompt", branch: { selectedHeadId: "u1" } });
+    // An assistant head starts a new run so its role line (with the switcher) is shown.
+    expect(rows[2]).toMatchObject({ kind: "text", role: { branch: { selectedHeadId: "a2" } } });
+  });
+});

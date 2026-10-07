@@ -1,31 +1,49 @@
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { ArrowDown } from "lucide-react";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import type { Node } from "@/ipc/bindings";
+import type { SubagentRun, Transcript, TranscriptScope } from "@/ipc/bindings";
+import { cn } from "@/lib/cn";
 import { useCurrentTranscript } from "@/queries";
 import { useUi } from "@/state/ui";
-import { NodeView } from "./nodes";
+import { anchorKey, buildRows, type GroupingInput, INHERITED_KEY, locate, rowIndexOf } from "./grouping";
+import { isContinuation, RowView } from "./nodes";
+import { clearScroll, type PendingScroll, scrollToNode, TranscriptContext, type TranscriptCtx, usePendingScroll } from "./nodes/scroll";
+import { toolKey } from "./tools";
 
-const PIN_THRESHOLD = 48;
+export { scrollToNode, type ScrollRequest } from "./nodes/scroll";
 
-interface Row {
-  node: Node;
-  showRole: boolean;
-}
+/**
+ * Scroll + highlight API for other features (⌘F / T4.2, outline, links):
+ *
+ * ```ts
+ * const scrollTo = useScrollToNode();
+ * scrollTo({ scope, nodeId, toolUseId, thinking: loc.kind === "thinking", flashMs: null });
+ * ```
+ *
+ * The list rendering `scope` (main transcript, or the Subagent panel when `scope.kind === "subagent"` is the
+ * panel's innermost agent) expands whatever hides the target — the Fork-inherited prefix (`inherited`), the
+ * tool group (`group:<firstNodeId>|<firstToolUseId>`), the call (`tool:<nodeId>|<toolUseId>`), thinking
+ * (`thinking:<nodeId>`) or a compact summary (`compact:<nodeId>`) — scrolls the virtualizer so the target is
+ * centered, then sets `useUi.highlight` (cleared after `flashMs`, default 2000; `null` keeps it).
+ * A request for a scope that is not mounted yet waits for it. Plain function form: `scrollToNode(req)`.
+ */
+export const useScrollToNode = () => scrollToNode;
 
-function toRows(nodes: Node[], showHidden: boolean): Row[] {
-  const rows: Row[] = [];
-  for (const node of nodes) {
-    if (node.hidden && !showHidden) continue;
-    const prev = rows[rows.length - 1]?.node.body.kind;
-    rows.push({ node, showRole: node.body.kind === "assistant" && prev !== "assistant" });
+declare global {
+  interface Window {
+    /** E2E hook: the UI store, exposed in dev / mock builds only. */
+    __cvStore?: typeof useUi;
   }
-  return rows;
 }
+if (import.meta.env.DEV || import.meta.env.VITE_IPC === "mock") window.__cvStore = useUi;
+
+const MAIN: TranscriptScope = { kind: "main" };
+const PIN_THRESHOLD = 48;
 
 export function TranscriptView() {
   const sessionId = useUi((s) => s.sessionId);
-  const { data } = useCurrentTranscript();
+  const { data, isPlaceholderData } = useCurrentTranscript();
+  usePendingJump();
 
   if (!sessionId) {
     return (
@@ -38,14 +56,93 @@ export function TranscriptView() {
   if (!data || data.sessionId !== sessionId) {
     return <div data-testid="transcript" className="flex-1" />;
   }
-  return <TranscriptBody key={sessionId} nodes={data.nodes} revision={data.revision} />;
+  return <TranscriptList key={sessionId} transcript={data} ready={!isPlaceholderData} scope={MAIN} follow testId="transcript" />;
 }
 
-function TranscriptBody({ nodes, revision }: { nodes: Node[]; revision: number }) {
+/**
+ * A2/A4 pendingJump consumer: applies the target's branch choices / hidden flag / panel stack, then queues the
+ * scroll in the scope that shows the node (main or the Subagent panel) and clears `pendingJump`.
+ */
+function usePendingJump() {
+  const jump = useUi((s) => s.pendingJump);
+  const sessionId = useUi((s) => s.sessionId);
+  useEffect(() => {
+    if (!jump || jump.sessionId !== sessionId) return;
+    const path = [...jump.agentPath];
+    if (jump.scope.kind === "subagent" && path[path.length - 1] !== jump.scope.agentId) path.push(jump.scope.agentId);
+    useUi.setState((s) => ({
+      scope: MAIN,
+      branchChoices: jump.branchChoices,
+      showHidden: s.showHidden || jump.needsHidden,
+      panelStack: path,
+      pendingJump: null,
+    }));
+    scrollToNode({ scope: jump.scope, nodeId: jump.nodeId, toolUseId: jump.toolUseId, flashMs: 2000 });
+  }, [jump, sessionId]);
+}
+
+export interface TranscriptListProps {
+  transcript: Transcript;
+  /** False while react-query shows placeholder data for a different request; scroll requests wait for true. */
+  ready: boolean;
+  scope: TranscriptScope;
+  /** Start at the bottom and stay pinned while content grows (main transcript). */
+  follow?: boolean;
+  /** Subagent scope: the run being shown (task card + final result). */
+  agent?: SubagentRun | null;
+  /** Runs known from elsewhere (the main transcript) for card / breadcrumb lookups. */
+  extraRuns?: SubagentRun[];
+  testId?: string;
+}
+
+/** Virtualized row list shared by the main transcript and the Subagent panel. */
+export function TranscriptList({ transcript, ready, scope, follow = false, agent = null, extraRuns, testId }: TranscriptListProps) {
+  const sessionId = transcript.sessionId;
   const showHidden = useUi((s) => s.showHidden);
-  const rows = useMemo(() => toRows(nodes, showHidden), [nodes, showHidden]);
+  const inheritedExpanded = useUi((s) => s.expanded[INHERITED_KEY] ?? false);
+  const panelStack = useUi((s) => s.panelStack);
+  const setPanelStack = useUi((s) => s.setPanelStack);
+
+  const input = useMemo<GroupingInput>(
+    () => ({
+      nodes: transcript.nodes,
+      branchPoints: transcript.branchPoints,
+      subagents: transcript.subagents,
+      workflows: transcript.workflows,
+      inherited: transcript.inherited,
+      orphanSubagentIds: transcript.orphanSubagentIds,
+      showHidden,
+      inheritedExpanded,
+      agent,
+    }),
+    [transcript, showHidden, inheritedExpanded, agent],
+  );
+  const grouping = useMemo(() => buildRows(input), [input]);
+  const rows = grouping.rows;
+
+  const ctx = useMemo<TranscriptCtx>(() => {
+    const runs = new Map<string, SubagentRun>();
+    for (const r of extraRuns ?? []) runs.set(r.agentId, r);
+    for (const r of transcript.subagents) runs.set(r.agentId, r);
+    return {
+      sessionId,
+      scope,
+      runs,
+      toolNode: grouping.toolNode,
+      activeAgentId: panelStack[panelStack.length - 1] ?? null,
+      openAgent: (agentId) => {
+        const stack = useUi.getState().panelStack;
+        if (scope.kind === "main") setPanelStack([agentId]);
+        else {
+          const at = stack.indexOf(scope.agentId);
+          setPanelStack([...(at >= 0 ? stack.slice(0, at + 1) : stack), agentId]);
+        }
+      },
+    };
+  }, [sessionId, scope, extraRuns, transcript.subagents, grouping.toolNode, panelStack, setPanelStack]);
+
   const scrollRef = useRef<HTMLDivElement>(null);
-  const pinned = useRef(true);
+  const pinned = useRef(follow);
   const [unread, setUnread] = useState(false);
 
   const virtualizer = useVirtualizer({
@@ -53,7 +150,7 @@ function TranscriptBody({ nodes, revision }: { nodes: Node[]; revision: number }
     getScrollElement: () => scrollRef.current,
     estimateSize: () => 110,
     overscan: 8,
-    getItemKey: (i) => rows[i]!.node.id,
+    getItemKey: (i) => rows[i]!.key,
   });
 
   const toBottom = useCallback(() => {
@@ -65,9 +162,9 @@ function TranscriptBody({ nodes, revision }: { nodes: Node[]; revision: number }
     const el = scrollRef.current;
     if (!el) return;
     const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight <= PIN_THRESHOLD;
-    pinned.current = atBottom;
+    pinned.current = follow && atBottom;
     if (atBottom) setUnread(false);
-  }, []);
+  }, [follow]);
 
   // Stay at the bottom while content grows (new rows, late measurements) if the user was there.
   const total = virtualizer.getTotalSize();
@@ -82,49 +179,115 @@ function TranscriptBody({ nodes, revision }: { nodes: Node[]; revision: number }
       firstRevision.current = false;
       return;
     }
-    if (!pinned.current) setUnread(true);
-  }, [revision]);
+    if (follow && !pinned.current) setUnread(true);
+  }, [transcript.revision, follow]);
+
+  // ---- scroll requests (pendingJump, find, card ↔ notification links) ----
+  const pending = usePendingScroll(scope);
+  const [target, setTarget] = useState<PendingScroll | null>(null);
+
+  useEffect(() => {
+    if (!pending || !ready) return;
+    clearScroll(scope, pending.seq);
+    const full = inheritedExpanded ? grouping : buildRows({ ...input, inheritedExpanded: true });
+    const loc = locate(full, pending.nodeId, pending.toolUseId, { thinking: pending.thinking, toolKey });
+    if (!loc) return;
+    if (loc.expand.length) {
+      useUi.setState((s) => ({ expanded: { ...s.expanded, ...Object.fromEntries(loc.expand.map((k) => [k, true])) } }));
+    }
+    pinned.current = false;
+    setTarget(pending);
+  }, [pending, ready, scope, grouping, input, inheritedExpanded]);
+
+  useEffect(() => {
+    if (!target) return;
+    // Wait until the inherited prefix is expanded (the node maps to the banner until then).
+    if (grouping.inheritedIds.has(target.nodeId) && !inheritedExpanded) return;
+    const idx = rowIndexOf(grouping, target.nodeId, target.toolUseId);
+    setTarget(null);
+    if (idx === undefined) return;
+    virtualizer.scrollToIndex(idx, { align: "center" });
+    const el = scrollRef.current;
+    if (el) settle(el, anchorKey(target.nodeId, target.toolUseId), target.nodeId);
+    const h = { nodeId: target.nodeId, ...(target.toolUseId ? { toolUseId: target.toolUseId } : {}) };
+    useUi.getState().setHighlight(h);
+    const flash = target.flashMs === undefined ? 2000 : target.flashMs;
+    if (flash != null) {
+      setTimeout(() => {
+        if (useUi.getState().highlight === h) useUi.getState().setHighlight(null);
+      }, flash);
+    }
+  }, [target, grouping, inheritedExpanded, virtualizer]);
 
   return (
-    <div className="relative flex min-h-0 min-w-0 flex-1 flex-col">
-      <div
-        ref={scrollRef}
-        onScroll={onScroll}
-        data-testid="transcript"
-        className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-6"
-      >
-        <div className="relative mx-auto max-w-[820px]" style={{ height: total + 40 }}>
-          {virtualizer.getVirtualItems().map((v) => {
-            const row = rows[v.index]!;
-            return (
-              <div
-                key={v.key}
-                ref={virtualizer.measureElement}
-                data-index={v.index}
-                className="absolute top-0 left-0 w-full pb-[18px]"
-                style={{ transform: `translateY(${v.start + 20}px)` }}
-              >
-                <NodeView node={row.node} showRole={row.showRole} />
-              </div>
-            );
-          })}
-        </div>
-      </div>
-      {unread && (
-        <button
-          type="button"
-          data-testid="new-messages"
-          onClick={() => {
-            pinned.current = true;
-            toBottom();
-            setUnread(false);
-          }}
-          className="absolute bottom-4 left-1/2 flex -translate-x-1/2 items-center gap-1 rounded-full bg-accent px-3 py-1 text-[12px] text-white shadow-lg"
+    <TranscriptContext.Provider value={ctx}>
+      <div className="relative flex min-h-0 min-w-0 flex-1 flex-col">
+        <div
+          ref={scrollRef}
+          onScroll={onScroll}
+          data-testid={testId}
+          data-scope={scope.kind === "main" ? "main" : scope.agentId}
+          className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-6"
         >
-          有新消息
-          <ArrowDown size={12} strokeWidth={2} />
-        </button>
-      )}
-    </div>
+          <div className="relative mx-auto max-w-[820px]" style={{ height: total + 40 }}>
+            {virtualizer.getVirtualItems().map((v) => {
+              const row = rows[v.index]!;
+              return (
+                <div
+                  key={v.key}
+                  ref={virtualizer.measureElement}
+                  data-index={v.index}
+                  data-row={row.kind}
+                  className={cn("absolute top-0 left-0 w-full", v.index === 0 ? "" : isContinuation(row) ? "pt-2" : "pt-[18px]")}
+                  style={{ transform: `translateY(${v.start + 20}px)` }}
+                >
+                  <RowView row={row} />
+                </div>
+              );
+            })}
+          </div>
+        </div>
+        {unread && (
+          <button
+            type="button"
+            data-testid="new-messages"
+            onClick={() => {
+              pinned.current = true;
+              toBottom();
+              setUnread(false);
+            }}
+            className="absolute bottom-4 left-1/2 flex -translate-x-1/2 items-center gap-1 rounded-full bg-accent px-3 py-1 text-[12px] text-white shadow-lg"
+          >
+            有新消息
+            <ArrowDown size={12} strokeWidth={2} />
+          </button>
+        )}
+      </div>
+    </TranscriptContext.Provider>
   );
+}
+
+/**
+ * `scrollToIndex` lands on estimated offsets; once the target row is measured, nudge the scroller until the
+ * anchor element sits centered (or 24px from the top when taller than the viewport).
+ */
+function settle(scroller: HTMLElement, anchor: string, nodeId: string) {
+  let frames = 0;
+  let stable = 0;
+  const step = () => {
+    const el =
+      scroller.querySelector<HTMLElement>(`[data-anchor="${CSS.escape(anchor)}"]`) ??
+      scroller.querySelector<HTMLElement>(`[data-anchor="${CSS.escape(nodeId)}"]`);
+    if (el) {
+      const sr = scroller.getBoundingClientRect();
+      const er = el.getBoundingClientRect();
+      const want = er.height < sr.height - 48 ? (sr.height - er.height) / 2 : 24;
+      const delta = er.top - sr.top - want;
+      const before = scroller.scrollTop;
+      if (Math.abs(delta) > 2) scroller.scrollTop = before + delta;
+      stable = Math.abs(delta) <= 2 || scroller.scrollTop === before ? stable + 1 : 0;
+    }
+    if (++frames < 40 && stable < 3) requestAnimationFrame(step);
+  };
+  requestAnimationFrame(step);
 }

@@ -1,0 +1,198 @@
+import { expect, test, type Locator, type Page } from "@playwright/test";
+import type { JumpTarget } from "../src/ipc/bindings";
+
+const RICH_TITLE = "为 /v1/chat 接口增加令牌桶限流中间件";
+const FORK_TITLE = "认证模块重构（改用 JWT 轮换）";
+
+async function openSession(page: Page, title: string) {
+  await page.goto("/");
+  const row = page.getByTestId("session-row").filter({ hasText: title });
+  await row.click();
+  await expect(page.getByTestId("header").getByRole("heading", { name: title })).toBeVisible();
+  return (await row.getAttribute("data-session-id"))!;
+}
+
+/** Scrolls a virtualized list upward from the bottom until `target` is rendered. */
+async function reveal(scroller: Locator, target: Locator) {
+  await expect(scroller.locator("[data-row]").first()).toBeVisible();
+  await scroller.evaluate((e) => (e.scrollTop = e.scrollHeight));
+  for (let i = 0; i < 40 && (await target.count()) === 0; i++) {
+    await scroller.evaluate((e) => (e.scrollTop = Math.max(0, e.scrollTop - 300)));
+    await scroller.page().waitForTimeout(50);
+  }
+  await target.first().scrollIntoViewIfNeeded();
+}
+
+async function jump(page: Page, target: Omit<JumpTarget, "inSubagent" | "inAbandonedBranch" | "needsHidden"> & Partial<JumpTarget>) {
+  await page.evaluate(
+    (t) =>
+      window.__cvStore!.getState().jumpTo({
+        inSubagent: t.agentPath.length > 0,
+        inAbandonedBranch: false,
+        needsHidden: false,
+        ...t,
+      }),
+    target,
+  );
+}
+
+test("切换 Branch 后后续内容随之改变", async ({ page }) => {
+  await openSession(page, RICH_TITLE);
+  const transcript = page.getByTestId("transcript");
+  await transcript.evaluate((e) => (e.scrollTop = 0));
+  const switcher = page.getByTestId("branch-switcher");
+  await expect(switcher.getByTestId("branch-index")).toHaveText("1 / 2");
+  await expect(transcript.getByText("先只加中间件，不要动 handler。")).toBeVisible();
+
+  await switcher.getByRole("button", { name: "下一个分支" }).click();
+  await expect(switcher.getByTestId("branch-index")).toHaveText("2 / 2");
+  await expect(transcript.getByText("顺便把 handler 里重复的鉴权逻辑也一起收敛掉。")).toBeVisible();
+  await expect(transcript.getByText("这会改动 handler 的签名，影响面较大。")).toBeVisible();
+  await expect(transcript.getByText("先只加中间件，不要动 handler。")).toHaveCount(0);
+
+  await switcher.getByRole("button", { name: "上一个分支" }).click();
+  await expect(switcher.getByTestId("branch-index")).toHaveText("1 / 2");
+  await expect(transcript.getByText("先只加中间件，不要动 handler。")).toBeVisible();
+});
+
+test("工具调用合并成组，含失败调用的组默认展开", async ({ page }) => {
+  await openSession(page, RICH_TITLE);
+  const transcript = page.getByTestId("transcript");
+  await transcript.evaluate((e) => (e.scrollTop = 0));
+  const groups = page.getByTestId("tool-group");
+  await expect(groups.filter({ hasText: "2 次工具调用" })).not.toHaveAttribute("data-open");
+  const failed = groups.filter({ hasText: "1 失败" });
+  await expect(failed).toHaveAttribute("data-open", "true");
+  await expect(failed.locator('[data-testid="tool-call"][data-failed]')).toBeVisible();
+  await groups.filter({ hasText: "2 次工具调用" }).getByRole("button", { name: /2 次工具调用/ }).click();
+  await expect(groups.filter({ hasText: "2 次工具调用" }).getByTestId("tool-call")).toHaveCount(2);
+});
+
+test("打开 Subagent 面板，嵌套卡片推入面包屑，Esc 关闭", async ({ page }) => {
+  await openSession(page, RICH_TITLE);
+  const card = page.locator('[data-testid="subagent-card"][data-agent-id="ag-sync1"]');
+  await reveal(page.getByTestId("transcript"), card);
+  await expect(page.getByTestId("parallel-agents")).toContainText("并行 · 2 个 Subagent");
+  await card.getByTestId("open-subagent").click();
+
+  const panel = page.getByTestId("subagent-panel");
+  await expect(panel).toBeVisible();
+  const crumbs = panel.getByTestId("panel-breadcrumb");
+  await expect(crumbs).toContainText("主对话");
+  await expect(crumbs.getByTestId("crumb")).toHaveText(["Explore · 梳理现有中间件注册方式"]);
+  await expect(card).toContainText("正在右侧查看");
+  await expect(panel.getByTestId("task-prompt")).toContainText("找出 lumen-api 里所有 tower Layer 的注册位置与顺序。");
+  await expect(panel.getByTestId("final-result")).toContainText("共 3 处注册");
+
+  await panel.locator('[data-agent-id="ag-nested1"]').getByTestId("open-subagent").click();
+  await expect(crumbs.getByTestId("crumb")).toHaveText(["Explore · 梳理现有中间件注册方式", "general-purpose · 核对 cors 层的配置来源"]);
+  await expect(panel.getByTestId("panel-meta")).toContainText("嵌套深度 2");
+  await expect(panel.getByTestId("panel-transcript").getByText("来自 config.toml 的 [cors] allowed_origins。").first()).toBeVisible();
+
+  await crumbs.getByTestId("crumb").first().click();
+  await expect(crumbs.getByTestId("crumb")).toHaveCount(1);
+
+  await page.keyboard.press("Escape");
+  await expect(panel).toHaveCount(0);
+});
+
+test("Workflow 卡片中的 agent 在面板中打开", async ({ page }) => {
+  await openSession(page, RICH_TITLE);
+  const wf = page.getByTestId("workflow-card");
+  await reveal(page.getByTestId("transcript"), wf);
+  await expect(wf).toContainText("3 阶段 · 2 个 agent");
+  await wf.getByTestId("workflow-agent").filter({ hasText: "安全评审" }).click();
+  await expect(page.getByTestId("panel-breadcrumb").getByTestId("crumb")).toHaveText(["security-reviewer"]);
+});
+
+test("后台 agent 卡片与结果通知互相跳转", async ({ page }) => {
+  await openSession(page, RICH_TITLE);
+  const card = page.locator('[data-testid="subagent-card"][data-agent-id="ag-async1"]');
+  await reveal(page.getByTestId("transcript"), card);
+  await card.getByTestId("card-to-notification").click();
+  await expect(page.locator('[data-anchor="n-notify"][data-highlighted]')).toBeVisible();
+  await page.getByTestId("notification-to-card").click();
+  await expect(page.locator('[data-anchor="n12|tu_agent_tests"][data-highlighted]')).toBeVisible();
+});
+
+test("显示系统消息开关控制隐藏条目", async ({ page }) => {
+  await openSession(page, RICH_TITLE);
+  const transcript = page.getByTestId("transcript");
+  await transcript.evaluate((e) => (e.scrollTop = 0));
+  await expect(transcript.getByText("可用技能：review、simplify、security-review（共 3 项）")).toHaveCount(0);
+  await page.getByTestId("header").getByText("显示系统消息").click();
+  await transcript.evaluate((e) => (e.scrollTop = 0));
+  await expect(transcript.getByText("可用技能：review、simplify、security-review（共 3 项）")).toBeVisible();
+  await page.getByTestId("header").getByText("显示系统消息").click();
+  await expect(transcript.getByText("可用技能：review、simplify、security-review（共 3 项）")).toHaveCount(0);
+});
+
+test("Fork 继承的历史默认折叠，可展开与收起", async ({ page }) => {
+  await openSession(page, FORK_TITLE);
+  const transcript = page.getByTestId("transcript");
+  const banner = page.getByTestId("fork-banner");
+  await expect(banner).toContainText("Fork 自");
+  await expect(banner).toContainText("重构认证模块：拆分 token 校验与会话存储");
+  await expect(page.getByTestId("fork-divider")).toContainText("以下为本 Session 新增内容");
+  const inherited = transcript.getByText("把 auth 模块里 token 校验和会话存储拆开，先给出拆分方案。");
+  await expect(inherited).toHaveCount(0);
+
+  await banner.getByTestId("toggle-inherited").click();
+  await transcript.evaluate((e) => (e.scrollTop = 0));
+  await expect(inherited).toBeVisible();
+  await expect(banner.getByTestId("toggle-inherited")).toHaveText("收起继承的 6 条消息");
+
+  await banner.getByTestId("toggle-inherited").click();
+  await expect(inherited).toHaveCount(0);
+});
+
+test("pendingJump 进入嵌套 Subagent 时打开面板并高亮目标", async ({ page }) => {
+  const sid = await openSession(page, RICH_TITLE);
+  await jump(page, {
+    sessionId: sid,
+    scope: { kind: "subagent", agentId: "ag-nested1" },
+    branchChoices: [],
+    nodeId: "ag1n-a1",
+    toolUseId: null,
+    agentPath: ["ag-sync1", "ag-nested1"],
+  });
+  const panel = page.getByTestId("subagent-panel");
+  await expect(panel.getByTestId("panel-breadcrumb").getByTestId("crumb")).toHaveCount(2);
+  const target = panel.locator('[data-anchor="ag1n-a1"][data-highlighted]');
+  await expect(target.first()).toBeVisible();
+  // The flash ring clears after 2 s.
+  await expect(panel.locator('[data-anchor="ag1n-a1"][data-highlighted]')).toHaveCount(0, { timeout: 4000 });
+  expect(await page.evaluate(() => window.__cvStore!.getState().pendingJump)).toBeNull();
+});
+
+test("pendingJump 展开折叠的工具组并切换到被放弃的 Branch", async ({ page }) => {
+  const sid = await openSession(page, RICH_TITLE);
+  await jump(page, { sessionId: sid, scope: { kind: "main" }, branchChoices: [], nodeId: "n08", toolUseId: "tu_edit2", agentPath: [] });
+  const hit = page.locator('[data-anchor="n08|tu_edit2"][data-highlighted]');
+  await expect(hit).toBeVisible();
+  await expect(hit).toBeInViewport();
+  await expect(page.getByTestId("tool-group").filter({ has: page.locator('[data-anchor="n08|tu_edit2"]') })).toHaveAttribute("data-open", "true");
+
+  await jump(page, {
+    sessionId: sid,
+    scope: { kind: "main" },
+    branchChoices: [{ anchorKey: "n04", headId: "n05x" }],
+    nodeId: "n05y",
+    toolUseId: "tu_alt_edit",
+    agentPath: [],
+    inAbandonedBranch: true,
+  });
+  await expect(page.locator('[data-anchor="n05y|tu_alt_edit"][data-highlighted]')).toBeVisible();
+  await expect(page.getByTestId("branch-index")).toHaveText("2 / 2");
+});
+
+test("从其他 Session 发起 pendingJump 时打开目标 Session 并定位", async ({ page }) => {
+  const sid = await openSession(page, RICH_TITLE);
+  await page.getByTestId("session-row").filter({ hasText: FORK_TITLE }).click();
+  await expect(page.getByTestId("fork-banner")).toBeVisible();
+  await jump(page, { sessionId: sid, scope: { kind: "main" }, branchChoices: [], nodeId: "n04", toolUseId: "tu_bash1", agentPath: [] });
+  await expect(page.getByTestId("header").getByRole("heading", { name: RICH_TITLE })).toBeVisible();
+  const hit = page.locator('[data-anchor="n04|tu_bash1"][data-highlighted]');
+  await expect(hit).toBeVisible();
+  await expect(hit).toBeInViewport();
+});
