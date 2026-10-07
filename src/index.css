@@ -36,6 +36,20 @@
     --color-code: #2c2c2f;
     --color-error: #ff8a80;
     --color-error-bg: #3a2220;
+    --color-diff-add: #17301f;
+    --color-diff-add-text: #8fd6a6;
+    --color-diff-del: #3a2220;
+    --color-diff-del-text: #ffb4ab;
+  }
+}
+
+.shk {
+  color: var(--shiki-light);
+}
+
+@media (prefers-color-scheme: dark) {
+  .shk {
+    color: var(--shiki-dark);
   }
 }
 

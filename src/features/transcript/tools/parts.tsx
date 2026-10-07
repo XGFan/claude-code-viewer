@@ -1,0 +1,316 @@
+import { Check, ChevronDown, ChevronRight, CircleX, Loader2, X } from "lucide-react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
+import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
+import type { ImageRef, ToolCall } from "@/ipc/bindings";
+import { parseAnsi, stripAnsi } from "@/lib/ansi";
+import { cn } from "@/lib/cn";
+import { TokenSpans, useHighlight } from "@/lib/shiki";
+import { useImage } from "@/queries/hooks";
+import { useUi } from "@/state/ui";
+import { formatBytes, toolKey, type OutputState, type ToolCtx } from "./data";
+
+const durationText = (ms: number) => (ms < 1000 ? `${Math.round(ms)}ms` : `${(ms / 1000).toFixed(1)}s`);
+
+/** Collapsible frame: one-line header (summary) and an expandable body. Failed calls are red and open by default. */
+export function Shell({
+  nodeId,
+  call,
+  startMs,
+  icon,
+  name,
+  summary,
+  status,
+  failed,
+  defaultOpen = false,
+  children,
+}: {
+  nodeId: string;
+  call: ToolCall;
+  startMs: number | null;
+  icon: ReactNode;
+  /** Tool name label; omitted for Bash / Edit where the icon says it. */
+  name?: string;
+  summary: ReactNode;
+  /** Replaces the default 完成 / 失败 badge. */
+  status?: ReactNode;
+  failed: boolean;
+  defaultOpen?: boolean;
+  children: ReactNode;
+}) {
+  const key = toolKey(nodeId, call.toolUseId);
+  const open = useUi((s) => s.expanded[key] ?? (failed || defaultOpen));
+  const toggle = useUi((s) => s.toggleExpanded);
+  const result = call.result;
+  const dur =
+    result?.timestampMs != null && startMs != null && result.timestampMs >= startMs ? result.timestampMs - startMs : null;
+  return (
+    <div
+      data-testid="tool-call"
+      data-tool={call.name}
+      data-failed={failed || undefined}
+      className={cn("overflow-hidden rounded-lg border", failed ? "border-error/30" : "border-border")}
+    >
+      <button
+        type="button"
+        aria-expanded={open}
+        onClick={() => toggle(key, failed || defaultOpen)}
+        className={cn(
+          "flex w-full items-center gap-2 px-2.5 py-1.5 text-left text-[12px]",
+          open && "border-b",
+          failed ? "border-error/30 bg-error-bg text-error" : "border-border bg-list text-text/80",
+        )}
+      >
+        {open ? <ChevronDown size={12} strokeWidth={1.8} /> : <ChevronRight size={12} strokeWidth={1.8} />}
+        {icon}
+        {name && <span className="shrink-0 font-semibold">{name}</span>}
+        <span className="flex min-w-0 flex-1 items-center gap-2">{summary}</span>
+        {status ??
+          (result == null ? (
+            <span className="text-secondary">执行中</span>
+          ) : failed ? (
+            <span className="flex items-center gap-1 font-semibold">
+              <CircleX size={13} strokeWidth={1.8} />
+              失败
+            </span>
+          ) : (
+            <span className="flex items-center gap-1 text-live">
+              <Check size={12} strokeWidth={2} />
+              完成
+            </span>
+          ))}
+        {dur != null && <span className="text-secondary">{durationText(dur)}</span>}
+      </button>
+      {open && <div data-testid="tool-body">{children}</div>}
+    </div>
+  );
+}
+
+export const Mono = ({ children, className }: { children: ReactNode; className?: string }) => (
+  <code className={cn("min-w-0 truncate font-mono text-[12px]", className)}>{children}</code>
+);
+
+export function Label({ children }: { children: ReactNode }) {
+  return <div className="px-3 pt-1.5 pb-0.5 text-[11px] text-secondary">{children}</div>;
+}
+
+export function Spinner({ text }: { text: string }) {
+  return (
+    <div className="flex items-center gap-2 px-3 py-2 text-[12px] text-secondary" role="status">
+      <Loader2 size={13} className="animate-spin" aria-hidden />
+      {text}
+    </div>
+  );
+}
+
+const HEAD = 30;
+const TAIL = 20;
+
+/** Footer with the "加载完整输出" button, source and loading / error state. */
+function LoadBar({ out, dark }: { out: OutputState; dark: boolean }) {
+  if (!out.canLoad && !out.source) return null;
+  const tone = dark ? "bg-[#2a2b2f] text-[#a1a1a6]" : "bg-list text-secondary";
+  return (
+    <div className={cn("flex items-center gap-3 px-3 py-1.5 text-[11px]", tone)}>
+      {out.canLoad && !out.loaded && (
+        <button
+          type="button"
+          onClick={out.load}
+          disabled={out.loading}
+          className={cn("flex items-center gap-1.5 rounded px-1.5 py-0.5 font-medium", dark ? "text-[#8ab4f8] hover:bg-white/10" : "text-accent hover:bg-selection")}
+        >
+          {out.loading && <Loader2 size={11} className="animate-spin" aria-hidden />}
+          加载完整输出{out.totalBytes > 0 ? `（共 ${formatBytes(out.totalBytes)}）` : ""}
+        </button>
+      )}
+      {out.loaded && <span>已加载完整输出（{formatBytes(out.totalBytes)}）</span>}
+      {out.capped && <span>超出 8 MB 的部分已截断</span>}
+      {out.error && <span className={dark ? "text-[#ff8a80]" : "text-error"}>完整输出不可用</span>}
+      {out.source && <span className="ml-auto font-mono">来源：{out.source}</span>}
+    </div>
+  );
+}
+
+function TermLines({ text }: { text: string }) {
+  const [all, setAll] = useState(false);
+  const lines = text.split("\n");
+  const fold = !all && lines.length > HEAD + TAIL + 5;
+  const shown = fold ? [...lines.slice(0, HEAD), null, ...lines.slice(-TAIL)] : lines;
+  const hidden = lines.length - HEAD - TAIL;
+  return (
+    <>
+      {shown.map((l, i) =>
+        l === null ? (
+          <button
+            key="fold"
+            type="button"
+            onClick={() => setAll(true)}
+            className="my-0.5 block w-full rounded bg-white/5 py-0.5 text-center text-[11px] text-[#a1a1a6] hover:bg-white/10"
+          >
+            ⋯ 中间 {hidden} 行已折叠 ⋯
+          </button>
+        ) : (
+          <div key={i}>
+            {parseAnsi(l).map((s, j) => (
+              <span
+                key={j}
+                style={{
+                  color: s.fg,
+                  backgroundColor: s.bg,
+                  fontWeight: s.bold ? 600 : undefined,
+                  fontStyle: s.italic ? "italic" : undefined,
+                  textDecoration: s.underline ? "underline" : undefined,
+                  opacity: s.dim ? 0.65 : undefined,
+                }}
+              >
+                {s.text}
+              </span>
+            ))}
+            {l === "" && "\u200b"}
+          </div>
+        ),
+      )}
+    </>
+  );
+}
+
+/** ANSI-aware terminal text; the middle of long output is folded ("⋯ 中间 N 行已折叠 ⋯"). `stderr` renders after stdout. */
+export function Terminal({ text, stderr }: { text: string; stderr?: string }) {
+  return (
+    <pre
+      data-testid="terminal"
+      className="m-0 max-h-[28rem] overflow-auto bg-terminal px-3 py-2.5 font-mono text-[12px] leading-[1.55] whitespace-pre-wrap break-words text-[#e4e4e6]"
+    >
+      {text === "" && !stderr && <span className="text-[#a1a1a6]">（无输出）</span>}
+      {text !== "" && <TermLines text={text} />}
+      {stderr && (
+        <>
+          {text !== "" && <div className="mt-2 text-[11px] text-[#a1a1a6] select-none">stderr</div>}
+          <TermLines text={stderr} />
+        </>
+      )}
+    </pre>
+  );
+}
+
+/** Output of a tool: terminal-styled or plain, plus the load-full-output bar. */
+export function OutputView({ out, terminal = false, empty = "（无输出）" }: { out: OutputState; terminal?: boolean; empty?: string }) {
+  return (
+    <div data-testid="tool-output">
+      {terminal ? (
+        <Terminal text={out.text} />
+      ) : (
+        <pre className="m-0 max-h-80 overflow-auto bg-code px-3 py-2 font-mono text-[12px] leading-[1.55] whitespace-pre-wrap break-words">
+          {stripAnsi(out.text) || empty}
+        </pre>
+      )}
+      <LoadBar out={out} dark={terminal} />
+    </div>
+  );
+}
+
+const MAX_CODE_LINES = 3000;
+
+/** Code with a line-number gutter, highlighted through the Shiki worker (plain until ready). */
+export function CodeView({
+  code,
+  lang,
+  startLine = 1,
+  numbers,
+  footer,
+}: {
+  code: string;
+  lang: string | null;
+  startLine?: number;
+  /** Explicit line numbers (Read output); defaults to startLine + index. */
+  numbers?: number[];
+  footer?: ReactNode;
+}) {
+  const hl = useHighlight(code, lang);
+  const lines = hl ?? code.split("\n").map((c) => [{ c }]);
+  const shown = lines.slice(0, MAX_CODE_LINES);
+  return (
+    <div>
+      <div data-testid="code-view" className="max-h-96 overflow-auto bg-code py-1.5 font-mono text-[12px] leading-[1.6]">
+        {shown.map((l, i) => (
+          <div key={i} className="flex px-3">
+            <span className="w-9 shrink-0 pr-2 text-right text-secondary/70 select-none">{numbers?.[i] ?? startLine + i}</span>
+            <span className="min-w-0 whitespace-pre-wrap break-all">
+              <TokenSpans tokens={l} />
+              {l.length === 0 && "​"}
+            </span>
+          </div>
+        ))}
+        {lines.length > MAX_CODE_LINES && (
+          <div className="px-3 pt-1 text-[11px] text-secondary">⋯ 其余 {lines.length - MAX_CODE_LINES} 行未显示 ⋯</div>
+        )}
+      </div>
+      {footer}
+    </div>
+  );
+}
+
+export { LoadBar };
+
+/** Lazy image thumbnail (loads when scrolled into view); click enlarges in a dialog. */
+export function ImageThumb({ image, ctx }: { image: ImageRef; ctx: ToolCtx | null }) {
+  const ref = useRef<HTMLButtonElement>(null);
+  const [seen, setSeen] = useState(false);
+  const [open, setOpen] = useState(false);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el || seen) return;
+    if (typeof IntersectionObserver === "undefined") return setSeen(true);
+    const io = new IntersectionObserver((es) => es.some((e) => e.isIntersecting) && setSeen(true), { rootMargin: "200px" });
+    io.observe(el);
+    return () => io.disconnect();
+  }, [seen]);
+  const q = useImage(seen && ctx ? { sessionId: ctx.sessionId, scope: ctx.scope, image } : null);
+  const src = q.data ? `data:${q.data.mediaType};base64,${q.data.dataBase64}` : null;
+  return (
+    <>
+      <button
+        ref={ref}
+        type="button"
+        data-testid="image-thumb"
+        aria-label="放大图片"
+        onClick={() => src && setOpen(true)}
+        className="flex h-24 min-w-24 max-w-56 items-center justify-center overflow-hidden rounded-md border border-border bg-code"
+      >
+        {src ? (
+          <img src={src} alt="" className="max-h-full max-w-full object-contain" />
+        ) : q.isError ? (
+          <span className="px-2 text-[11px] text-secondary">图片不可用</span>
+        ) : (
+          <Loader2 size={14} className="animate-spin text-secondary" aria-hidden />
+        )}
+      </button>
+      <Dialog open={open} onOpenChange={setOpen}>
+        <DialogContent className="flex max-h-[90vh] w-auto max-w-[90vw] items-center justify-center p-2">
+          <DialogTitle className="sr-only">图片预览</DialogTitle>
+          <DialogDescription className="sr-only">{image.mediaType}</DialogDescription>
+          {src && <img data-testid="image-large" src={src} alt="" className="max-h-[85vh] max-w-[88vw] object-contain" />}
+          <button
+            type="button"
+            aria-label="关闭"
+            onClick={() => setOpen(false)}
+            className="absolute top-2 right-2 rounded bg-black/50 p-1 text-white"
+          >
+            <X size={14} />
+          </button>
+        </DialogContent>
+      </Dialog>
+    </>
+  );
+}
+
+/** A row of thumbnails; also usable for user-prompt images (`body.images`). */
+export function ImageRefs({ images, ctx }: { images: ImageRef[]; ctx: ToolCtx | null }) {
+  if (images.length === 0) return null;
+  return (
+    <div className="flex flex-wrap gap-2 px-3 py-2">
+      {images.map((im) => (
+        <ImageThumb key={`${im.nodeId}:${im.ordinal}`} image={im} ctx={ctx} />
+      ))}
+    </div>
+  );
+}

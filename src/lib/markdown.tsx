@@ -2,6 +2,7 @@ import type { ComponentProps } from "react";
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { cn } from "@/lib/cn";
+import { HighlightedCode } from "@/lib/shiki";
 
 const components: Components = {
   p: (p) => <p className="my-0 [&:not(:last-child)]:mb-2" {...strip(p)} />,
@@ -28,10 +29,11 @@ const components: Components = {
     />
   ),
   code: ({ className, children, node: _node, ...rest }) => {
-    const block = /language-/.test(className ?? "") || String(children).includes("\n");
+    const lang = /language-([\w+#-]+)/.exec(className ?? "")?.[1] ?? null;
+    const block = lang != null || String(children).includes("\n");
     return block ? (
       <code className={className} {...rest}>
-        {children}
+        <HighlightedCode code={String(children).replace(/\n$/, "")} lang={lang} />
       </code>
     ) : (
       <code className="rounded bg-code px-[5px] py-px font-mono text-[12px]" {...rest}>
