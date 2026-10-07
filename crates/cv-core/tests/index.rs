@@ -1,0 +1,512 @@
+//! Index (T2.1): scan dedupe, incremental appends, session-level reparses, removals and schema
+//! rebuilds. Fixture copies in temp dirs only; assertions read the index tables directly so they
+//! hold independently of assembly (`summarize` only feeds the session row's derived columns).
+mod common;
+
+use std::fs::{self, OpenOptions};
+use std::io::Write;
+use std::path::{Path, PathBuf};
+
+use common::{fixture_root, ids};
+use cv_core::model::DataRootSource;
+use cv_core::{ChangeSet, Engine, EngineConfig};
+use rusqlite::{Connection, params};
+use tempfile::TempDir;
+
+struct Env {
+    root: TempDir,
+    cache: TempDir,
+    engine: Engine,
+}
+
+fn open(root: &Path, cache: &Path) -> Engine {
+    Engine::open(EngineConfig {
+        data_root: root.to_path_buf(),
+        data_root_source: DataRootSource::Settings,
+        cache_dir: cache.to_path_buf(),
+    })
+    .expect("open engine")
+}
+
+fn scanned(scenario: &str) -> Env {
+    let root = fixture_root(scenario);
+    let cache = tempfile::tempdir().unwrap();
+    let engine = open(root.path(), cache.path());
+    engine.scan_all(&|_| {}).expect("scan_all");
+    Env {
+        root,
+        cache,
+        engine,
+    }
+}
+
+impl Env {
+    fn db(&self) -> Connection {
+        Connection::open(self.cache.path().join("index.sqlite")).unwrap()
+    }
+
+    /// Canonical path of a main file (temp dirs live under a symlinked /var on macOS).
+    fn main_file(&self, dir: &str, sid: &str) -> PathBuf {
+        fs::canonicalize(
+            self.root
+                .path()
+                .join("projects")
+                .join(dir)
+                .join(format!("{sid}.jsonl")),
+        )
+        .unwrap()
+    }
+
+    fn apply(&self, path: &Path) -> ChangeSet {
+        self.engine
+            .apply_changes(&[path.to_path_buf()])
+            .expect("apply_changes")
+    }
+}
+
+fn count(conn: &Connection, sql: &str, arg: &str) -> i64 {
+    conn.query_row(sql, [arg], |r| r.get(0)).unwrap()
+}
+
+fn messages(conn: &Connection, sid: &str) -> i64 {
+    count(
+        conn,
+        "SELECT count(*) FROM messages WHERE session_id=?1",
+        sid,
+    )
+}
+
+/// (id, parsed_offset, text_offset, line_count, size) of a file row.
+fn file_row(conn: &Connection, path: &Path) -> (i64, i64, i64, i64, i64) {
+    conn.query_row(
+        "SELECT id, parsed_offset, text_offset, line_count, size FROM files WHERE path=?1",
+        [path.to_string_lossy()],
+        |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
+    )
+    .unwrap()
+}
+
+/// Marks a file row so a session-level reparse (which recreates the row) is detectable.
+fn set_sentinel(conn: &Connection, path: &Path) {
+    conn.execute(
+        "UPDATE files SET text_offset = 7 WHERE path=?1",
+        params![path.to_string_lossy()],
+    )
+    .unwrap();
+}
+
+fn append(path: &Path, text: &str) {
+    let mut f = OpenOptions::new().append(true).open(path).unwrap();
+    f.write_all(text.as_bytes()).unwrap();
+}
+
+fn prompt_line(uuid: &str, parent: &str, text: &str) -> String {
+    format!(
+        r#"{{"type":"user","uuid":"{uuid}","parentUuid":"{parent}","timestamp":"2026-10-07T10:00:00.000Z","sessionId":"{sid}","message":{{"role":"user","content":"{text}"}}}}"#,
+        sid = ids::BASIC
+    ) + "\n"
+}
+
+fn assistant_line(uuid: &str, parent: &str, msg_id: &str) -> String {
+    format!(
+        r#"{{"type":"assistant","uuid":"{uuid}","parentUuid":"{parent}","timestamp":"2026-10-07T10:00:01.000Z","sessionId":"{sid}","message":{{"id":"{msg_id}","role":"assistant","model":"claude-test","content":[{{"type":"text","text":"ok"}}],"usage":{{"input_tokens":1,"output_tokens":2}}}}}}"#,
+        sid = ids::BASIC
+    ) + "\n"
+}
+
+#[test]
+fn symlinked_dir_and_copies_index_one_session_each() {
+    let env = scanned("copies");
+    let db = env.db();
+    let sessions: i64 = db
+        .query_row("SELECT count(*) FROM sessions", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(sessions, 2, "one row per session id");
+    let main_files: Vec<String> = db
+        .prepare("SELECT path FROM files WHERE role=0 ORDER BY path")
+        .unwrap()
+        .query_map([], |r| r.get(0))
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap();
+    assert_eq!(main_files.len(), 4, "2 real copies per session");
+    assert!(
+        main_files.iter().all(|p| !p.contains(ids::COPIES_LINK)),
+        "symlinked project dir is deduplicated by realpath: {main_files:?}"
+    );
+    // Union by key across copies: the superset has 4 prompts + 4 assistant messages.
+    assert_eq!(messages(&db, ids::COPIES_SUPERSET), 8);
+    assert_eq!(messages(&db, ids::COPIES_IDENTICAL), 4);
+    let changed = env.engine.apply_changes(&[]).unwrap();
+    assert_eq!(
+        changed,
+        ChangeSet::default(),
+        "a rescan without changes is a no-op"
+    );
+}
+
+#[test]
+fn append_is_incremental() {
+    let env = scanned("basic");
+    let db = env.db();
+    let path = env.main_file(ids::BASIC_DIR, ids::BASIC);
+    let (id, offset, _, lines, _) = file_row(&db, &path);
+    let msgs = messages(&db, ids::BASIC);
+    set_sentinel(&db, &path);
+
+    append(
+        &path,
+        &(prompt_line(
+            "t-u1",
+            "0bd99c42-5d43-5421-bf13-548ddfe11016",
+            "appended prompt",
+        ) + &assistant_line("t-a1", "t-u1", "msg_t1")),
+    );
+    let cs = env.apply(&path);
+    assert_eq!(cs.changed, vec![ids::BASIC.to_owned()]);
+
+    let size = fs::metadata(&path).unwrap().len() as i64;
+    let (id2, offset2, sentinel, lines2, _) = file_row(&db, &path);
+    assert_eq!(id2, id, "file row kept");
+    assert_eq!(sentinel, 7, "no session reparse (row not recreated)");
+    assert!(offset2 > offset);
+    assert_eq!(offset2, size);
+    assert_eq!(lines2, lines + 2);
+    assert_eq!(messages(&db, ids::BASIC), msgs + 2);
+    let out_tok: i64 = db
+        .query_row(
+            "SELECT out_tok FROM messages WHERE session_id=?1 AND key='msg_t1'",
+            [ids::BASIC],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(out_tok, 2);
+}
+
+#[test]
+fn truncate_triggers_full_reparse() {
+    let env = scanned("basic");
+    let db = env.db();
+    let path = env.main_file(ids::BASIC_DIR, ids::BASIC);
+    let msgs = messages(&db, ids::BASIC);
+    set_sentinel(&db, &path);
+
+    let text = fs::read_to_string(&path).unwrap();
+    let kept: String = text.split_inclusive('\n').take(20).collect();
+    fs::write(&path, &kept).unwrap();
+    let cs = env.apply(&path);
+    assert_eq!(cs.changed, vec![ids::BASIC.to_owned()]);
+
+    let (_, offset, sentinel, lines, size) = file_row(&db, &path);
+    assert_eq!(sentinel, 0, "row recreated by the session reparse");
+    assert_eq!(offset, kept.len() as i64);
+    assert_eq!(size, kept.len() as i64);
+    assert_eq!(lines, 20);
+    assert!(messages(&db, ids::BASIC) < msgs);
+}
+
+#[test]
+fn inode_replace_triggers_full_reparse() {
+    let env = scanned("basic");
+    let db = env.db();
+    let path = env.main_file(ids::BASIC_DIR, ids::BASIC);
+    let (_, _, _, lines, _) = file_row(&db, &path);
+    let msgs = messages(&db, ids::BASIC);
+    set_sentinel(&db, &path);
+
+    let mut text = fs::read_to_string(&path).unwrap();
+    text.push_str(&prompt_line(
+        "t-u2",
+        "0bd99c42-5d43-5421-bf13-548ddfe11016",
+        "after replace",
+    ));
+    let tmp = path.with_extension("tmp");
+    fs::write(&tmp, &text).unwrap();
+    fs::rename(&tmp, &path).unwrap();
+    env.apply(&path);
+
+    let (_, offset, sentinel, lines2, _) = file_row(&db, &path);
+    assert_eq!(sentinel, 0, "new inode: session reparsed");
+    assert_eq!(offset, text.len() as i64);
+    assert_eq!(lines2, lines + 1);
+    assert_eq!(messages(&db, ids::BASIC), msgs + 1);
+}
+
+#[test]
+fn partial_trailing_line_is_picked_up_after_completion() {
+    let env = scanned("basic");
+    let db = env.db();
+    let path = env.main_file(ids::BASIC_DIR, ids::BASIC);
+    let (_, offset, _, _, _) = file_row(&db, &path);
+    let msgs = messages(&db, ids::BASIC);
+
+    let line = prompt_line(
+        "t-u3",
+        "0bd99c42-5d43-5421-bf13-548ddfe11016",
+        "slowly written",
+    );
+    let (head, tail) = line.split_at(line.len() / 2);
+    append(&path, head);
+    env.apply(&path);
+    let (_, offset_mid, _, _, size_mid) = file_row(&db, &path);
+    assert_eq!(offset_mid, offset, "an incomplete line is not consumed");
+    assert_eq!(size_mid, fs::metadata(&path).unwrap().len() as i64);
+    assert_eq!(messages(&db, ids::BASIC), msgs);
+
+    append(&path, tail);
+    env.apply(&path);
+    let (_, offset_end, _, _, _) = file_row(&db, &path);
+    assert_eq!(offset_end, fs::metadata(&path).unwrap().len() as i64);
+    assert_eq!(messages(&db, ids::BASIC), msgs + 1);
+}
+
+#[test]
+fn schema_or_root_mismatch_rebuilds() {
+    let root = fixture_root("basic");
+    let cache = tempfile::tempdir().unwrap();
+    let files = |c: &Connection| -> i64 {
+        c.query_row("SELECT count(*) FROM files", [], |r| r.get(0))
+            .unwrap()
+    };
+    {
+        let engine = open(root.path(), cache.path());
+        engine.scan_all(&|_| {}).unwrap();
+    }
+    let db_path = cache.path().join("index.sqlite");
+    {
+        let c = Connection::open(&db_path).unwrap();
+        assert_eq!(files(&c), 1);
+        c.pragma_update(None, "user_version", 999).unwrap();
+    }
+    {
+        let engine = open(root.path(), cache.path());
+        let c = Connection::open(&db_path).unwrap();
+        let v: u32 = c
+            .query_row("PRAGMA user_version", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(v, cv_core::index::schema::SCHEMA_VERSION);
+        assert_eq!(files(&c), 0, "version mismatch: index recreated");
+        let cs = engine.scan_all(&|_| {}).unwrap();
+        assert_eq!(cs.changed, vec![ids::BASIC.to_owned()]);
+        assert_eq!(files(&c), 1);
+    }
+    let other_root = fixture_root("live");
+    let _engine = open(other_root.path(), cache.path());
+    let c = Connection::open(&db_path).unwrap();
+    assert_eq!(files(&c), 0, "data root mismatch: index recreated");
+}
+
+#[test]
+fn deleted_file_removes_session() {
+    let env = scanned("basic");
+    let db = env.db();
+    let path = env.main_file(ids::BASIC_DIR, ids::BASIC);
+    fs::remove_file(&path).unwrap();
+    let cs = env.apply(&path);
+    assert_eq!(cs.removed, vec![ids::BASIC.to_owned()]);
+    assert!(cs.projects_changed);
+    for table in [
+        "sessions WHERE id",
+        "files WHERE session_id",
+        "messages WHERE session_id",
+    ] {
+        assert_eq!(
+            count(&db, &format!("SELECT count(*) FROM {table}=?1"), ids::BASIC),
+            0,
+            "{table}"
+        );
+    }
+    let projects: i64 = db
+        .query_row("SELECT count(*) FROM projects", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(projects, 0, "project without sessions is pruned");
+}
+
+#[test]
+fn deleted_copy_with_surviving_sibling_keeps_session() {
+    let env = scanned("copies");
+    let db = env.db();
+    // Drop the superset copy: the session is reparsed from the 2-turn prefix copy (A7).
+    let big = env.main_file(ids::COPIES_DIR, ids::COPIES_SUPERSET);
+    fs::remove_file(&big).unwrap();
+    let cs = env.apply(&big);
+    assert_eq!(cs.changed, vec![ids::COPIES_SUPERSET.to_owned()]);
+    assert!(cs.removed.is_empty());
+    assert_eq!(
+        count(
+            &db,
+            "SELECT count(*) FROM sessions WHERE id=?1",
+            ids::COPIES_SUPERSET
+        ),
+        1
+    );
+    assert_eq!(
+        count(
+            &db,
+            "SELECT count(*) FROM files WHERE session_id=?1",
+            ids::COPIES_SUPERSET
+        ),
+        1
+    );
+    assert_eq!(
+        messages(&db, ids::COPIES_SUPERSET),
+        4,
+        "rows of the removed copy are gone"
+    );
+
+    // Drop one of two identical copies: nothing is lost.
+    let old = env.main_file(ids::COPIES_DIR_OLD, ids::COPIES_IDENTICAL);
+    fs::remove_file(&old).unwrap();
+    env.apply(&old);
+    assert_eq!(messages(&db, ids::COPIES_IDENTICAL), 4);
+    assert_eq!(
+        count(
+            &db,
+            "SELECT count(*) FROM sessions WHERE id=?1",
+            ids::COPIES_IDENTICAL
+        ),
+        1
+    );
+}
+
+#[test]
+fn agent_files_and_sidecars_are_classified() {
+    let env = scanned("workflow");
+    let db = env.db();
+    let by_role = |role: i64| -> i64 {
+        db.query_row("SELECT count(*) FROM files WHERE role=?1", [role], |r| {
+            r.get(0)
+        })
+        .unwrap()
+    };
+    assert_eq!(by_role(0), 1);
+    assert_eq!(by_role(2), 5, "only agent-*.jsonl are agent transcripts");
+    let runs: i64 = db
+        .query_row(
+            "SELECT count(DISTINCT workflow_run_id) FROM subagents WHERE session_id=?1",
+            [ids::WORKFLOW],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(runs, 2);
+
+    let env = scanned("subagents");
+    let db = env.db();
+    assert_eq!(
+        count(
+            &db,
+            "SELECT count(*) FROM subagents WHERE session_id=?1",
+            ids::SUBAGENTS
+        ),
+        5
+    );
+    // A8: session totals = main + Σ agents; the agent part comes from the index alone.
+    let (total, main): (i64, i64) = db
+        .query_row(
+            "SELECT out_tok, main_out_tok FROM sessions WHERE id=?1",
+            [ids::SUBAGENTS],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .unwrap();
+    let agents: i64 = db
+        .query_row(
+            "SELECT sum(out_tok) FROM messages WHERE session_id=?1 AND agent_id != ''",
+            [ids::SUBAGENTS],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert!(agents > 0);
+    assert_eq!(total - main, agents);
+}
+
+/// Engine read API over the index. Titles/counts come from `assemble::summarize` (T2.2).
+#[test]
+fn engine_lists_projects_sessions_and_detail() {
+    use cv_core::model::{SessionQuery, SessionSort};
+    let env = scanned("fork");
+    let projects = env.engine.list_projects().unwrap();
+    assert_eq!(projects.len(), 1);
+    let p = &projects[0];
+    assert_eq!(
+        p.id, "/Users/dev/code/tidepool",
+        "raw cwd when the directory is gone"
+    );
+    assert_eq!(p.display_name, "tidepool");
+    assert!(p.missing);
+    assert_eq!(p.session_count, 2);
+
+    let q = SessionQuery {
+        project_ids: vec![p.id.clone()],
+        sort: SessionSort::Created,
+        descending: false,
+        ..SessionQuery::default()
+    };
+    let list = env.engine.list_sessions(&q).unwrap();
+    let order: Vec<&str> = list.iter().map(|s| s.id.as_str()).collect();
+    assert_eq!(order, vec![ids::FORK_ORIGIN, ids::FORK_CHILD]);
+    let child = &list[1];
+    assert_eq!(
+        child.fork_origin.as_ref().map(|o| o.session_id.as_str()),
+        Some(ids::FORK_ORIGIN)
+    );
+    let other = SessionQuery {
+        project_ids: vec!["/nowhere".into()],
+        ..SessionQuery::default()
+    };
+    assert!(env.engine.list_sessions(&other).unwrap().is_empty());
+    let live_only = SessionQuery {
+        live_only: true,
+        ..SessionQuery::default()
+    };
+    // Fixture copies may carry a fresh mtime (recent-write fallback); only check the filter holds.
+    assert!(
+        env.engine
+            .list_sessions(&live_only)
+            .unwrap()
+            .iter()
+            .all(|s| s.live.is_some())
+    );
+
+    let detail = env.engine.get_session(ids::FORK_ORIGIN).unwrap();
+    assert_eq!(
+        detail.resume_command,
+        format!("claude --resume {}", ids::FORK_ORIGIN)
+    );
+    assert_eq!(detail.files.len(), 1);
+    assert_eq!(detail.forks.len(), 1);
+    assert_eq!(detail.forks[0].session_id, ids::FORK_CHILD);
+    assert!(env.engine.get_session("missing-id").is_err());
+    let path = env.engine.session_file_path(ids::FORK_CHILD, None).unwrap();
+    assert_eq!(path, env.main_file(ids::FORK_DIR, ids::FORK_CHILD));
+}
+
+/// Live follow: the cached parse is extended by the appended bytes and the revision changes.
+/// Node shapes come from assembly (T2.2).
+#[test]
+fn transcript_follows_appends() {
+    use cv_core::model::{TranscriptRequest, TranscriptScope};
+    let env = scanned("basic");
+    let req = TranscriptRequest {
+        session_id: ids::BASIC.into(),
+        scope: TranscriptScope::Main,
+        branch_choices: vec![],
+        include_hidden: false,
+    };
+    let t1 = env.engine.get_transcript(&req).unwrap();
+    assert_eq!(
+        env.engine.get_transcript(&req).unwrap().revision,
+        t1.revision
+    );
+
+    let path = env.main_file(ids::BASIC_DIR, ids::BASIC);
+    append(
+        &path,
+        &(prompt_line("t-u4", "0bd99c42-5d43-5421-bf13-548ddfe11016", "follow me")
+            + &assistant_line("t-a4", "t-u4", "msg_t4")),
+    );
+    env.apply(&path);
+    let t2 = env.engine.get_transcript(&req).unwrap();
+    assert_ne!(t2.revision, t1.revision);
+    assert_eq!(t2.nodes.len(), t1.nodes.len() + 2);
+    assert_eq!(t2.nodes.last().unwrap().id, "t-a4");
+}

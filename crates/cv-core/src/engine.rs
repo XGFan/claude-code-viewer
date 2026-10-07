@@ -1,16 +1,57 @@
 //! Engine facade: the only API src-tauri calls. Blocking; callers run it off the main thread.
+//!
+//! Index sync (phase 1, plan §4): stat-walk the data root, diff against `files`, light-parse
+//! changed files in parallel (rayon), write rows in one transaction per batch, then recompute
+//! every dirty session from its skeleton. Appends read only `[parsed_offset, EOF)`; a shrunk,
+//! replaced or rewritten file, or a removed file whose session still has other files, triggers a
+//! session-level reparse (A7).
+//!
+//! Display: an LRU of assembled Sessions keyed by session id and validated by a revision hash over
+//! (path, size, mtime) of every source and sidecar file (A9). Main files are kept parsed per
+//! (dev, ino) with their consumed offset, so a live append parses only the new bytes (A14a).
+//!
+//! Source files are only ever opened with `File::open` (read-only, ADR-0002).
 
-use std::path::PathBuf;
+use std::collections::{BTreeMap, HashMap, HashSet};
+use std::fmt;
+use std::fs::File;
+use std::io::{self, Read, Seek, SeekFrom};
+use std::os::unix::fs::MetadataExt;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
 
-use crate::error::{CoreError, CoreResult};
-use crate::index::schema::SCHEMA_VERSION;
-use crate::model::{
-    AppInfo, DataRootSource, Diagnostics, FindRequest, FindResult, ImageData, ImageRequest,
-    IndexStatus, JumpRequest, JumpTarget, LiveChanged, ProjectSummary, SearchRequest,
-    SearchResponse, SessionDetail, SessionQuery, SessionSummary, Stats, StatsRequest, ToolDetail,
-    ToolDetailRequest, ToolOutputSearchEvent, Transcript, TranscriptRequest,
+use parking_lot::Mutex;
+use rayon::prelude::*;
+use rusqlite::{Connection, OptionalExtension};
+
+use crate::assemble::{
+    self, AssembledSession, LoadedFile, SessionAggregates, SessionSidecar, SubagentMetaFile,
+    WorkflowFiles,
 };
+use crate::error::{CoreError, CoreResult};
+use crate::index::reader::{self, FileRecord};
+use crate::index::schema::{HEAD_LEN, SCHEMA_VERSION};
+use crate::index::writer::{self, AgentRow, FileRows, FileWrite, ProjectRow, SessionRow};
+use crate::index::{Index, text};
+use crate::live;
+use crate::model::{
+    AppInfo, DataRootSource, Diagnostics, FileRole, FindRequest, FindResult, ImageData,
+    ImageRequest, IndexPhase, IndexStatus, JumpRequest, JumpTarget, LiveChanged, LiveEntry,
+    LiveState, ProjectSummary, SearchRequest, SearchResponse, SessionDetail, SessionQuery,
+    SessionSummary, SourceFile, Stats, StatsRequest, TokenTotals, ToolDetail, ToolDetailRequest,
+    ToolOutputSearchEvent, Transcript, TranscriptRequest, TranscriptScope,
+};
+use crate::parse::{ParsedChunk, parse_bytes};
+use crate::paths::{index_db_path, sessions_dir};
+use crate::scan::{self, ScanResult, ScannedFile, SessionDirListing, SidecarFile, SidecarKind};
+use crate::{diag, search, stats};
+
+/// Bytes parsed per write transaction during a sync.
+const BATCH_BYTES: u64 = 256 << 20;
+/// Assembled Sessions kept for display (plan §5 T2.1).
+const SESSION_CACHE_CAP: usize = 4;
+/// Parsed Subagent Run files kept for the Subagent scope.
+const AGENT_CACHE_CAP: usize = 4;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct EngineConfig {
@@ -26,19 +67,54 @@ pub struct EngineConfig {
 pub struct ChangeSet {
     pub changed: Vec<String>,
     pub removed: Vec<String>,
+    /// A session appeared, disappeared or became (non-)empty, or a project row was added/removed.
     pub projects_changed: bool,
 }
 
-#[derive(Debug)]
 pub struct Engine {
     cfg: EngineConfig,
+    index: Index,
+    status: Mutex<IndexStatus>,
+    /// Serializes syncs and rebuilds (the single writer).
+    sync_lock: Mutex<()>,
+    /// Last snapshot returned by `poll_live`.
+    live: Mutex<Option<Vec<LiveEntry>>>,
+    sessions: Mutex<Lru<String, CachedSession>>,
+    agents: Mutex<Lru<(String, String), (FileState, LoadedFile)>>,
+    /// Sidecar (size, mtime, session) seen by the last sync; `None` before the first one.
+    sidecar_state: Mutex<Option<SidecarState>>,
+}
+
+/// Sidecar path → (size, mtime, session id).
+type SidecarState = HashMap<PathBuf, (u64, i64, String)>;
+
+impl fmt::Debug for Engine {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Engine").field("cfg", &self.cfg).finish()
+    }
 }
 
 impl Engine {
-    /// Creates the cache dir. Never writes under the data root.
+    /// Creates the cache dir and opens (or recreates) the index. Never writes under the data root.
     pub fn open(cfg: EngineConfig) -> CoreResult<Self> {
         std::fs::create_dir_all(&cfg.cache_dir)?;
-        Ok(Engine { cfg })
+        let index = Index::open(&index_db_path(&cfg.cache_dir), &cfg.data_root)?;
+        let (sessions_total, text_ready) =
+            index.read(|c| Ok((reader::session_count(c)?, reader::text_ready(c)?)))?;
+        Ok(Engine {
+            cfg,
+            index,
+            status: Mutex::new(IndexStatus {
+                sessions_total,
+                text_ready,
+                ..IndexStatus::default()
+            }),
+            sync_lock: Mutex::new(()),
+            live: Mutex::new(None),
+            sessions: Mutex::new(Lru::new(SESSION_CACHE_CAP)),
+            agents: Mutex::new(Lru::new(AGENT_CACHE_CAP)),
+            sidecar_state: Mutex::new(None),
+        })
     }
 
     pub fn app_info(&self) -> AppInfo {
@@ -53,100 +129,1405 @@ impl Engine {
     }
 
     pub fn index_status(&self) -> IndexStatus {
-        IndexStatus::default()
+        self.status.lock().clone()
     }
 
     /// Phase 1: stat walk + metadata parse of changed files.
-    pub fn scan_all(&self, _p: &dyn Fn(&IndexStatus)) -> CoreResult<ChangeSet> {
-        Err(CoreError::NotImplemented("scan_all"))
+    pub fn scan_all(&self, p: &dyn Fn(&IndexStatus)) -> CoreResult<ChangeSet> {
+        self.sync(Some(p), false)
     }
 
-    /// Phase 2: full-text backlog.
+    /// Phase 2: full-text backlog (`index::text`, W3). `on_main_line` is set at insert time from
+    /// the session's Main Line set (A2).
     pub fn index_text_backlog(
         &self,
-        _p: &dyn Fn(&IndexStatus),
-        _cancel: &AtomicBool,
+        p: &dyn Fn(&IndexStatus),
+        cancel: &AtomicBool,
     ) -> CoreResult<()> {
-        Err(CoreError::NotImplemented("index_text_backlog"))
+        let _g = self.sync_lock.lock();
+        self.set_status(|s| s.phase = IndexPhase::IndexingText, p);
+        let mut main_set = |sid: &str| self.main_set_of(sid).unwrap_or_default();
+        let progress = |done: u64, total: u64| {
+            self.set_status(
+                |s| {
+                    s.bytes_done = done as f64;
+                    s.bytes_total = total as f64;
+                },
+                p,
+            );
+        };
+        let res = self
+            .index
+            .write(|conn| text::index_pending(conn, &mut main_set, &progress, cancel));
+        let ready = self.index.read(reader::text_ready).unwrap_or(false);
+        self.set_status(
+            |s| {
+                s.phase = match &res {
+                    Err(e) if !matches!(e, CoreError::NotImplemented(_) | CoreError::Cancelled) => {
+                        IndexPhase::Error
+                    }
+                    _ => IndexPhase::Idle,
+                };
+                s.text_ready = ready;
+                s.error = match &res {
+                    Err(e) if !matches!(e, CoreError::NotImplemented(_) | CoreError::Cancelled) => {
+                        Some(e.to_string())
+                    }
+                    _ => None,
+                };
+            },
+            p,
+        );
+        res
     }
 
-    /// Applies a debounced filesystem batch.
-    pub fn apply_changes(&self, _paths: &[PathBuf]) -> CoreResult<ChangeSet> {
-        Err(CoreError::NotImplemented("apply_changes"))
+    /// Applies a debounced filesystem batch. Paths only under `<root>/sessions` affect liveness
+    /// (see `poll_live`), not the index; anything else re-runs the (cheap) stat diff.
+    pub fn apply_changes(&self, paths: &[PathBuf]) -> CoreResult<ChangeSet> {
+        let sessions = sessions_dir(&self.cfg.data_root);
+        if !paths.is_empty() && paths.iter().all(|p| p.starts_with(&sessions)) {
+            return Ok(ChangeSet::default());
+        }
+        self.sync(None, true)
     }
 
     /// Returns the new Live Session snapshot when it changed since the last poll.
     pub fn poll_live(&self) -> CoreResult<Option<LiveChanged>> {
-        Err(CoreError::NotImplemented("poll_live"))
+        let snapshot: Vec<LiveEntry> = self
+            .live_map()?
+            .into_iter()
+            .map(|(session_id, state)| LiveEntry { session_id, state })
+            .collect();
+        let mut last = self.live.lock();
+        let changed = match last.as_ref() {
+            Some(prev) => *prev != snapshot,
+            None => !snapshot.is_empty(),
+        };
+        *last = Some(snapshot.clone());
+        Ok(changed.then_some(LiveChanged { live: snapshot }))
     }
 
-    /// Drops and rebuilds the index.
+    /// Drops and recreates the index, then runs a full scan.
     pub fn rebuild(&self) -> CoreResult<()> {
-        Err(CoreError::NotImplemented("rebuild"))
+        {
+            let _g = self.sync_lock.lock();
+            self.index.reset()?;
+            *self.sessions.lock() = Lru::new(SESSION_CACHE_CAP);
+            *self.agents.lock() = Lru::new(AGENT_CACHE_CAP);
+            *self.sidecar_state.lock() = None;
+        }
+        self.scan_all(&|_| {})?;
+        Ok(())
     }
 
     pub fn list_projects(&self) -> CoreResult<Vec<ProjectSummary>> {
-        Err(CoreError::NotImplemented("list_projects"))
+        let live = self.live_map()?;
+        let ids: Vec<String> = live.keys().cloned().collect();
+        self.index.read(|c| {
+            let mut projects = reader::list_projects(c)?;
+            let mut counts: HashMap<String, u32> = HashMap::new();
+            for p in reader::session_projects(c, &ids)?.into_values() {
+                *counts.entry(p).or_default() += 1;
+            }
+            for p in &mut projects {
+                p.live_count = counts.get(&p.id).copied().unwrap_or(0);
+            }
+            Ok(projects)
+        })
     }
 
-    pub fn list_sessions(&self, _q: &SessionQuery) -> CoreResult<Vec<SessionSummary>> {
-        Err(CoreError::NotImplemented("list_sessions"))
+    pub fn list_sessions(&self, q: &SessionQuery) -> CoreResult<Vec<SessionSummary>> {
+        let live = self.live_map()?;
+        let mut rows = self.index.read(|c| reader::list_sessions(c, q))?;
+        if q.live_only {
+            rows.retain(|s| live.contains_key(&s.id));
+        }
+        for s in &mut rows {
+            s.live = live.get(&s.id).cloned();
+        }
+        Ok(rows)
     }
 
-    pub fn get_session(&self, _id: &str) -> CoreResult<SessionDetail> {
-        Err(CoreError::NotImplemented("get_session"))
+    pub fn get_session(&self, id: &str) -> CoreResult<SessionDetail> {
+        let live = self.live_map()?;
+        let (row, files, forks, failed) = self.index.read(|c| {
+            let Some(row) = reader::session_detail(c, id)? else {
+                return Err(CoreError::NotFound("该 Session".into()));
+            };
+            let files = reader::session_files(c, id)?;
+            let forks = reader::fork_children(c, id)?;
+            let failed = files.iter().map(|f| f.failed_lines).sum::<u64>();
+            Ok((row, files, forks, failed))
+        })?;
+        let mut summary = row.summary;
+        summary.live = live.get(id).cloned();
+        let tokens_subagents = TokenTotals {
+            input: summary.tokens.input - row.tokens_main.input,
+            output: summary.tokens.output - row.tokens_main.output,
+            cache_read: summary.tokens.cache_read - row.tokens_main.cache_read,
+            cache_creation: summary.tokens.cache_creation - row.tokens_main.cache_creation,
+        };
+        Ok(SessionDetail {
+            summary,
+            cwd: row.cwd,
+            project_path: row.project_path,
+            project_missing: row.project_missing,
+            duration_ms: row.duration_ms,
+            models: row.models,
+            tokens_main: row.tokens_main,
+            tokens_subagents,
+            versions: row.versions,
+            files: files
+                .iter()
+                .map(|f| SourceFile {
+                    path: f.path.clone(),
+                    size: f.size as f64,
+                    role: f.role,
+                })
+                .collect(),
+            forks,
+            failed_lines: failed as u32,
+            resume_command: format!("claude --resume {id}"),
+        })
     }
 
-    pub fn get_transcript(&self, _r: &TranscriptRequest) -> CoreResult<Transcript> {
-        Err(CoreError::NotImplemented("get_transcript"))
+    pub fn get_transcript(&self, r: &TranscriptRequest) -> CoreResult<Transcript> {
+        self.with_session(&r.session_id, &r.scope, |s, agent| {
+            let mut t = assemble::transcript(s, r, agent)?;
+            t.revision = s.revision;
+            Ok(t)
+        })
     }
 
-    pub fn get_tool_detail(&self, _r: &ToolDetailRequest) -> CoreResult<ToolDetail> {
-        Err(CoreError::NotImplemented("get_tool_detail"))
+    pub fn get_tool_detail(&self, r: &ToolDetailRequest) -> CoreResult<ToolDetail> {
+        self.with_session(&r.session_id, &r.scope, |s, agent| {
+            assemble::content::tool_detail(s, r, agent)
+        })
     }
 
-    pub fn get_image(&self, _r: &ImageRequest) -> CoreResult<ImageData> {
-        Err(CoreError::NotImplemented("get_image"))
+    pub fn get_image(&self, r: &ImageRequest) -> CoreResult<ImageData> {
+        self.with_session(&r.session_id, &r.scope, |s, agent| {
+            assemble::content::image(s, r, agent)
+        })
     }
 
-    pub fn resolve_jump(&self, _r: &JumpRequest) -> CoreResult<JumpTarget> {
-        Err(CoreError::NotImplemented("resolve_jump"))
+    pub fn resolve_jump(&self, r: &JumpRequest) -> CoreResult<JumpTarget> {
+        self.with_session(&r.session_id, &TranscriptScope::Main, |s, _| {
+            assemble::jump::jump(s, r)
+        })
     }
 
-    pub fn find_in_session(&self, _r: &FindRequest) -> CoreResult<FindResult> {
-        Err(CoreError::NotImplemented("find_in_session"))
+    pub fn find_in_session(&self, r: &FindRequest) -> CoreResult<FindResult> {
+        self.with_session(&r.session_id, &r.scope, |s, agent| {
+            assemble::find::find(s, r, agent)
+        })
     }
 
-    pub fn search(&self, _r: &SearchRequest) -> CoreResult<SearchResponse> {
-        Err(CoreError::NotImplemented("search"))
+    pub fn search(&self, r: &SearchRequest) -> CoreResult<SearchResponse> {
+        let live: Vec<String> = self.live_map()?.into_keys().collect();
+        self.index.read(|c| search::run_fts(c, r, &live))
     }
 
-    /// Streams tool-output hits into `sink` until done or `cancel` is set.
+    /// Streams tool-output hits into `sink` until done or `cancel` is set. Targets are the
+    /// transcript files and persisted outputs of the sessions matching the request filters.
     pub fn search_tool_output(
         &self,
-        _r: &SearchRequest,
-        _cancel: &AtomicBool,
-        _sink: &mut dyn FnMut(ToolOutputSearchEvent),
+        r: &SearchRequest,
+        cancel: &AtomicBool,
+        sink: &mut dyn FnMut(ToolOutputSearchEvent),
     ) -> CoreResult<()> {
-        Err(CoreError::NotImplemented("search_tool_output"))
+        let q = search::parse_query(&r.query)?;
+        let sessions = self.list_sessions(&SessionQuery {
+            project_ids: r.project_id.iter().cloned().collect(),
+            live_only: r.live_only,
+            time_range: r.time_range.clone(),
+            ..SessionQuery::default()
+        })?;
+        let targets = self.index.read(|c| {
+            let mut out = Vec::new();
+            for s in &sessions {
+                let files = reader::session_files(c, &s.id)?;
+                let session_dir = files
+                    .iter()
+                    .find(|f| f.role == FileRole::Main)
+                    .and_then(|f| Path::new(&f.path).parent().map(|d| d.join(&s.id)));
+                for f in &files {
+                    out.push(search::ScanTarget {
+                        session_id: s.id.clone(),
+                        agent_id: f.agent_id.clone(),
+                        path: PathBuf::from(&f.path),
+                        kind: search::ScanTargetKind::Jsonl,
+                    });
+                }
+                let Some(dir) = session_dir else { continue };
+                let mut st = c.prepare_cached(
+                    "SELECT file_name, agent_id FROM persisted_outputs WHERE session_id=?1",
+                )?;
+                let rows = st.query_map([&s.id], |row| {
+                    Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?))
+                })?;
+                for row in rows {
+                    let (name, agent_id) = row?;
+                    out.push(search::ScanTarget {
+                        session_id: s.id.clone(),
+                        agent_id,
+                        path: dir.join("tool-results").join(name),
+                        kind: search::ScanTargetKind::PersistedOutput,
+                    });
+                }
+            }
+            Ok(out)
+        })?;
+        search::run_tool_output_scan(&self.cfg.data_root, targets, &q, cancel, sink)
     }
 
-    pub fn stats(&self, _r: &StatsRequest) -> CoreResult<Stats> {
-        Err(CoreError::NotImplemented("stats"))
+    pub fn stats(&self, r: &StatsRequest) -> CoreResult<Stats> {
+        self.index.read(|c| stats::compute(c, r))
     }
 
     pub fn diagnostics(&self) -> CoreResult<Diagnostics> {
-        Err(CoreError::NotImplemented("diagnostics"))
+        self.index.read(diag::compute)
     }
 
     /// Main file (or the agent file when `agent_id` is set) of a Session, for "在 Finder 中显示".
     pub fn session_file_path(
         &self,
-        _session_id: &str,
-        _agent_id: Option<&str>,
+        session_id: &str,
+        agent_id: Option<&str>,
     ) -> CoreResult<PathBuf> {
-        Err(CoreError::NotImplemented("session_file_path"))
+        let files = self.index.read(|c| reader::session_files(c, session_id))?;
+        let found = match agent_id {
+            None => files.iter().find(|f| f.role == FileRole::Main),
+            Some(a) => files.iter().find(|f| f.agent_id.as_deref() == Some(a)),
+        };
+        found
+            .map(|f| PathBuf::from(&f.path))
+            .ok_or_else(|| CoreError::NotFound("该 Session 的文件".into()))
     }
+
+    // ---------------------------------------------------------------- live
+
+    fn live_map(&self) -> CoreResult<BTreeMap<String, LiveState>> {
+        let pfs = live::read_process_files(&sessions_dir(&self.cfg.data_root));
+        let now = chrono::Utc::now().timestamp_millis() as f64;
+        let mtimes = self
+            .index
+            .read(|c| reader::main_mtimes(c, now - live::RECENT_WRITE_MS))?;
+        Ok(live::detect(&pfs, mtimes, now))
+    }
+
+    // ---------------------------------------------------------------- status
+
+    fn set_status(&self, f: impl FnOnce(&mut IndexStatus), p: &dyn Fn(&IndexStatus)) {
+        let snapshot = {
+            let mut s = self.status.lock();
+            f(&mut s);
+            s.clone()
+        };
+        p(&snapshot);
+    }
+
+    // ---------------------------------------------------------------- sync (phase 1)
+
+    fn sync(&self, p: Option<&dyn Fn(&IndexStatus)>, keep_cache: bool) -> CoreResult<ChangeSet> {
+        let _g = self.sync_lock.lock();
+        let p: &dyn Fn(&IndexStatus) = p.unwrap_or(&|_| {});
+        let scan = scan::scan_root(&self.cfg.data_root);
+        let db_files = self.index.read(reader::all_files)?;
+        let sidecar_dirty = self.diff_sidecars(&scan);
+        let (plans, removed) = plan_sync(&scan, db_files, &sidecar_dirty);
+        let with_text = self.index.read(reader::sessions_with_text)?;
+
+        let files_total: u32 = plans.iter().map(|p| p.ingest.len() as u32).sum();
+        let bytes_total: u64 = plans.iter().map(SessionPlan::ingest_bytes).sum();
+        self.set_status(
+            |s| {
+                s.phase = IndexPhase::Scanning;
+                s.files_total = files_total;
+                s.files_done = 0;
+                s.bytes_total = bytes_total as f64;
+                s.bytes_done = 0.0;
+                s.error = None;
+            },
+            p,
+        );
+
+        let mut cs = ChangeSet::default();
+        let result = (|| -> CoreResult<()> {
+            self.index.write(|conn| {
+                let tx = conn.transaction()?;
+                for sid in &removed {
+                    self.sessions.lock().take(sid);
+                    if session_exists(&tx, sid)?.is_some() {
+                        cs.removed.push(sid.clone());
+                        cs.projects_changed = true;
+                    }
+                    writer::delete_session(&tx, sid)?;
+                }
+                tx.commit()?;
+                Ok(())
+            })?;
+            for batch in batches(plans) {
+                let jobs: Vec<(SessionPlan, Option<CachedSession>)> = {
+                    let mut cache = self.sessions.lock();
+                    batch
+                        .into_iter()
+                        .map(|plan| {
+                            let cached = cache.take(&plan.sid);
+                            (plan, cached)
+                        })
+                        .collect()
+                };
+                let works: Vec<SessionWork> = jobs
+                    .into_par_iter()
+                    .map(|(plan, cached)| {
+                        let keep = keep_cache || cached.is_some();
+                        let need_main_set = !plan.reparse && with_text.contains(&plan.sid);
+                        compute_session(plan, cached, keep, need_main_set)
+                    })
+                    .collect();
+                let (files_done, bytes_done) = works.iter().fold((0u32, 0u64), |(f, b), w| {
+                    (f + w.files.len() as u32, b + w.bytes)
+                });
+                self.index.write(|conn| {
+                    let tx = conn.transaction()?;
+                    for w in &works {
+                        write_work(&tx, w, &mut cs)?;
+                    }
+                    tx.commit()?;
+                    Ok(())
+                })?;
+                {
+                    let mut cache = self.sessions.lock();
+                    for w in works {
+                        if let Some(c) = w.cache {
+                            cache.put(w.sid, c);
+                        }
+                    }
+                }
+                self.set_status(
+                    |s| {
+                        s.files_done += files_done;
+                        s.bytes_done += bytes_done as f64;
+                    },
+                    p,
+                );
+            }
+            self.index.write(|conn| {
+                if writer::prune_projects(conn)? > 0 {
+                    cs.projects_changed = true;
+                }
+                Ok(())
+            })?;
+            Ok(())
+        })();
+
+        let (total, ready) = self
+            .index
+            .read(|c| Ok((reader::session_count(c)?, reader::text_ready(c)?)))
+            .unwrap_or((0, false));
+        self.set_status(
+            |s| {
+                s.phase = if result.is_ok() {
+                    IndexPhase::Idle
+                } else {
+                    IndexPhase::Error
+                };
+                s.sessions_total = total;
+                s.text_ready = ready;
+                s.error = result.as_ref().err().map(ToString::to_string);
+            },
+            p,
+        );
+        result?;
+        cs.changed.sort();
+        cs.changed.dedup();
+        cs.removed.sort();
+        Ok(cs)
+    }
+
+    /// Sessions whose sidecar files changed since the previous sync (A9).
+    fn diff_sidecars(&self, scan: &ScanResult) -> HashSet<String> {
+        let now: SidecarState = scan
+            .sidecars
+            .iter()
+            .map(|s| (s.path.clone(), (s.size, s.mtime_ns, s.session_id.clone())))
+            .collect();
+        let mut dirty = HashSet::new();
+        let mut state = self.sidecar_state.lock();
+        if let Some(prev) = state.as_ref() {
+            for (path, v) in &now {
+                if prev.get(path) != Some(v) {
+                    dirty.insert(v.2.clone());
+                }
+            }
+            for (path, v) in prev {
+                if !now.contains_key(path) {
+                    dirty.insert(v.2.clone());
+                }
+            }
+        }
+        *state = Some(now);
+        dirty
+    }
+
+    /// A2: the Main Line set of a session, from its main files.
+    fn main_set_of(&self, sid: &str) -> CoreResult<HashSet<String>> {
+        let ctx = self.session_ctx(sid)?;
+        let (_, files) = load_main(&ctx.main, None)?;
+        let skeleton = assemble::build_skeleton(&files);
+        Ok(assemble::tree::main_set(&skeleton))
+    }
+
+    // ---------------------------------------------------------------- display
+
+    /// Current on-disk view of a session: main files (stat now), sidecar listing and revision.
+    fn session_ctx(&self, sid: &str) -> CoreResult<SessionCtx> {
+        let rows = self.index.read(|c| reader::session_files(c, sid))?;
+        let mut main: Vec<ScannedFile> = rows
+            .iter()
+            .filter(|f| f.role == FileRole::Main)
+            .filter_map(|f| {
+                let md = std::fs::metadata(&f.path).ok()?;
+                Some(ScannedFile {
+                    path: PathBuf::from(&f.path),
+                    dev: md.dev(),
+                    ino: md.ino(),
+                    size: md.size(),
+                    mtime_ns: scan::mtime_ns(&md),
+                    role: FileRole::Main,
+                    session_id: sid.to_owned(),
+                    agent_id: None,
+                    workflow_run_id: None,
+                })
+            })
+            .collect();
+        if main.is_empty() {
+            return Err(CoreError::NotFound("该 Session".into()));
+        }
+        sort_main(&mut main);
+        let mut dirs: Vec<PathBuf> = Vec::new();
+        for f in &main {
+            if let Some(d) = f.path.parent().map(|p| p.join(sid))
+                && !dirs.contains(&d)
+            {
+                dirs.push(d);
+            }
+        }
+        let session_dir = dirs.iter().find(|d| d.is_dir()).unwrap_or(&dirs[0]).clone();
+        let mut seen = HashSet::new();
+        let mut listing = SessionDirListing::default();
+        for d in &dirs {
+            let l = scan::list_session_dir(d, sid, &mut seen);
+            listing.agent_files.extend(l.agent_files);
+            listing.sidecars.extend(l.sidecars);
+        }
+        let mut h = Fnv::new();
+        for f in &main {
+            h.file(&f.path, f.size, f.mtime_ns);
+        }
+        for f in &listing.agent_files {
+            h.file(&f.path, f.size, f.mtime_ns);
+        }
+        for s in &listing.sidecars {
+            h.file(&s.path, s.size, s.mtime_ns);
+        }
+        Ok(SessionCtx {
+            main,
+            session_dir,
+            listing,
+            revision: h.revision(),
+        })
+    }
+
+    fn build_sidecar(&self, sid: &str, listing: &SessionDirListing) -> CoreResult<SessionSidecar> {
+        let mut metas: BTreeMap<String, SubagentMetaFile> = BTreeMap::new();
+        let mut workflows: BTreeMap<String, WorkflowFiles> = BTreeMap::new();
+        for f in &listing.agent_files {
+            let Some(aid) = f.agent_id.clone() else {
+                continue;
+            };
+            let m = metas
+                .entry(aid.clone())
+                .or_insert_with(|| SubagentMetaFile {
+                    agent_id: aid,
+                    role: f.role,
+                    workflow_run_id: f.workflow_run_id.clone(),
+                    transcript_path: None,
+                    meta_json: None,
+                });
+            m.transcript_path = Some(f.path.clone());
+            if let Some(run) = &f.workflow_run_id {
+                workflow_entry(&mut workflows, run);
+            }
+        }
+        for s in &listing.sidecars {
+            match &s.kind {
+                SidecarKind::AgentMeta {
+                    agent_id,
+                    role,
+                    workflow_run_id,
+                } => {
+                    let m = metas
+                        .entry(agent_id.clone())
+                        .or_insert_with(|| SubagentMetaFile {
+                            agent_id: agent_id.clone(),
+                            role: *role,
+                            workflow_run_id: workflow_run_id.clone(),
+                            transcript_path: None,
+                            meta_json: None,
+                        });
+                    m.meta_json = read_text(&s.path);
+                }
+                SidecarKind::WorkflowJson { run_id } => {
+                    workflow_entry(&mut workflows, run_id).workflow_json = read_text(&s.path);
+                }
+                SidecarKind::Journal { run_id } => {
+                    workflow_entry(&mut workflows, run_id).journal_jsonl = read_text(&s.path);
+                }
+            }
+        }
+        let (agent_stats, fork_origin) = self
+            .index
+            .read(|c| Ok((reader::agent_stats(c, sid)?, reader::fork_origin(c, sid)?)))?;
+        Ok(SessionSidecar {
+            subagent_metas: metas.into_values().collect(),
+            workflows: workflows.into_values().collect(),
+            agent_stats,
+            fork_origin,
+        })
+    }
+
+    /// Runs `f` on the assembled session (cached by revision) and, for the Subagent scope, the
+    /// Subagent Run's parsed file.
+    fn with_session<T>(
+        &self,
+        sid: &str,
+        scope: &TranscriptScope,
+        f: impl FnOnce(&AssembledSession, Option<&LoadedFile>) -> CoreResult<T>,
+    ) -> CoreResult<T> {
+        let ctx = self.session_ctx(sid)?;
+        let cached = self.sessions.lock().take(&sid.to_owned());
+        let entry = match cached {
+            Some(c) if c.assembled_revision() == Some(ctx.revision) => c,
+            other => {
+                let (states, files) = load_main(&ctx.main, other.map(CachedSession::into_parts))?;
+                let sidecar = self.build_sidecar(sid, &ctx.listing)?;
+                let mut a = assemble::assemble(sid, &ctx.session_dir, files, sidecar);
+                a.revision = ctx.revision;
+                CachedSession {
+                    states,
+                    body: Body::Assembled(Box::new(a)),
+                }
+            }
+        };
+        let agent = match scope {
+            TranscriptScope::Main => None,
+            TranscriptScope::Subagent { agent_id } => Some(self.load_agent(sid, agent_id, &ctx)?),
+        };
+        let out = match &entry.body {
+            Body::Assembled(a) => f(a, agent.as_ref().map(|(_, lf)| lf)),
+            Body::Files(_) => Err(CoreError::Internal("会话缓存状态异常".into())),
+        };
+        if let (Some(a), TranscriptScope::Subagent { agent_id }) = (agent, scope) {
+            self.agents
+                .lock()
+                .put((sid.to_owned(), agent_id.clone()), a);
+        }
+        self.sessions.lock().put(sid.to_owned(), entry);
+        out
+    }
+
+    fn load_agent(
+        &self,
+        sid: &str,
+        agent_id: &str,
+        ctx: &SessionCtx,
+    ) -> CoreResult<(FileState, LoadedFile)> {
+        let Some(file) = ctx
+            .listing
+            .agent_files
+            .iter()
+            .find(|f| f.agent_id.as_deref() == Some(agent_id))
+        else {
+            return Err(CoreError::NotFound("该 Subagent".into()));
+        };
+        let key = (sid.to_owned(), agent_id.to_owned());
+        let cached = self.agents.lock().take(&key);
+        Ok(load_one(file, cached)?)
+    }
+}
+
+// -------------------------------------------------------------------- caches
+
+/// A tiny most-recently-used-first cache.
+struct Lru<K, V> {
+    cap: usize,
+    items: Vec<(K, V)>,
+}
+
+impl<K: PartialEq, V> Lru<K, V> {
+    fn new(cap: usize) -> Self {
+        Lru {
+            cap,
+            items: Vec::new(),
+        }
+    }
+
+    fn take(&mut self, k: &K) -> Option<V> {
+        let i = self.items.iter().position(|(key, _)| key == k)?;
+        Some(self.items.remove(i).1)
+    }
+
+    fn put(&mut self, k: K, v: V) {
+        self.items.retain(|(key, _)| *key != k);
+        self.items.insert(0, (k, v));
+        self.items.truncate(self.cap);
+    }
+}
+
+/// Parse state of one cached file (A14a).
+#[derive(Clone, Debug)]
+struct FileState {
+    path: PathBuf,
+    dev: u64,
+    ino: u64,
+    /// Absolute offset just past the last consumed `\n`.
+    consumed: u64,
+    /// `\n` count in `[0, consumed)` (absolute line numbers of appended records).
+    lines: u32,
+    failed: u32,
+    first_error: Option<String>,
+    /// First ≤ [`HEAD_LEN`] bytes, to detect an in-place rewrite.
+    head: Vec<u8>,
+}
+
+impl FileState {
+    /// Same file (dev, ino, head bytes) that has not shrunk below what was parsed.
+    fn matches(&self, f: &ScannedFile) -> bool {
+        self.dev == f.dev
+            && self.ino == f.ino
+            && f.size >= self.consumed
+            && read_head(&f.path, self.head.len()).is_ok_and(|h| h == self.head)
+    }
+}
+
+enum Body {
+    Files(Vec<LoadedFile>),
+    Assembled(Box<AssembledSession>),
+}
+
+/// Parsed main files of a session, optionally assembled.
+struct CachedSession {
+    /// Parallel to the main files.
+    states: Vec<FileState>,
+    body: Body,
+}
+
+impl CachedSession {
+    fn assembled_revision(&self) -> Option<f64> {
+        match &self.body {
+            Body::Assembled(a) => Some(a.revision),
+            Body::Files(_) => None,
+        }
+    }
+
+    fn into_parts(self) -> (Vec<FileState>, Vec<LoadedFile>) {
+        let files = match self.body {
+            Body::Files(f) => f,
+            Body::Assembled(mut a) => std::mem::take(&mut a.main_files),
+        };
+        (self.states, files)
+    }
+}
+
+struct SessionCtx {
+    /// Largest first.
+    main: Vec<ScannedFile>,
+    session_dir: PathBuf,
+    listing: SessionDirListing,
+    revision: f64,
+}
+
+/// FNV-1a over (path, size, mtime) of a session's files, as an exact f64 (53 bits).
+struct Fnv(u64);
+
+impl Fnv {
+    fn new() -> Self {
+        Fnv(0xcbf2_9ce4_8422_2325)
+    }
+
+    fn bytes(&mut self, b: &[u8]) {
+        for x in b {
+            self.0 ^= u64::from(*x);
+            self.0 = self.0.wrapping_mul(0x0000_0100_0000_01b3);
+        }
+    }
+
+    fn file(&mut self, path: &Path, size: u64, mtime_ns: i64) {
+        self.bytes(path.as_os_str().as_encoded_bytes());
+        self.bytes(&size.to_le_bytes());
+        self.bytes(&mtime_ns.to_le_bytes());
+    }
+
+    fn revision(&self) -> f64 {
+        (self.0 & ((1u64 << 53) - 1)) as f64
+    }
+}
+
+// -------------------------------------------------------------------- file reading
+
+/// Reads `[from, EOF)` and parses its complete lines; also returns the `\n` count consumed.
+fn read_chunk(path: &Path, from: u64) -> io::Result<(ParsedChunk, u32)> {
+    let mut file = File::open(path)?;
+    let len = file.metadata()?.len();
+    if len <= from {
+        return Ok((
+            ParsedChunk {
+                consumed_to: from,
+                ..ParsedChunk::default()
+            },
+            0,
+        ));
+    }
+    file.seek(SeekFrom::Start(from))?;
+    let mut buf = Vec::with_capacity((len - from) as usize);
+    file.read_to_end(&mut buf)?;
+    let chunk = parse_bytes(&buf, from);
+    let consumed = (chunk.consumed_to - from) as usize;
+    let newlines = memchr::memchr_iter(b'\n', &buf[..consumed]).count() as u32;
+    Ok((chunk, newlines))
+}
+
+/// First ≤ [`HEAD_LEN`] bytes.
+fn read_head(path: &Path, len: usize) -> io::Result<Vec<u8>> {
+    let mut buf = Vec::with_capacity(len);
+    File::open(path)?.take(len as u64).read_to_end(&mut buf)?;
+    Ok(buf)
+}
+
+fn read_text(path: &Path) -> Option<String> {
+    let mut s = String::new();
+    File::open(path).ok()?.read_to_string(&mut s).ok()?;
+    Some(s)
+}
+
+fn load_fresh(f: &ScannedFile) -> io::Result<(FileState, LoadedFile)> {
+    let head = read_head(&f.path, HEAD_LEN)?;
+    let (chunk, lines) = read_chunk(&f.path, 0)?;
+    Ok((
+        FileState {
+            path: f.path.clone(),
+            dev: f.dev,
+            ino: f.ino,
+            consumed: chunk.consumed_to,
+            lines,
+            failed: chunk.failed,
+            first_error: chunk.first_error,
+            head,
+        },
+        LoadedFile {
+            path: f.path.clone(),
+            role: f.role,
+            agent_id: f.agent_id.clone(),
+            records: chunk.records,
+        },
+    ))
+}
+
+/// Appends records written since `st.consumed`.
+fn extend_loaded(st: &mut FileState, lf: &mut LoadedFile) -> io::Result<()> {
+    let (chunk, lines) = read_chunk(&st.path, st.consumed)?;
+    let base = st.lines;
+    lf.records.extend(chunk.records.into_iter().map(|mut r| {
+        r.line_no += base;
+        r
+    }));
+    st.lines += lines;
+    st.failed += chunk.failed;
+    if st.first_error.is_none() {
+        st.first_error = chunk.first_error;
+    }
+    st.consumed = chunk.consumed_to;
+    if st.head.len() < HEAD_LEN {
+        st.head = read_head(&st.path, HEAD_LEN)?;
+    }
+    Ok(())
+}
+
+type CachedFiles = HashMap<PathBuf, (FileState, LoadedFile)>;
+
+fn cached_files(cached: Option<(Vec<FileState>, Vec<LoadedFile>)>) -> CachedFiles {
+    cached
+        .map(|(s, f)| {
+            s.into_iter()
+                .zip(f)
+                .map(|(s, f)| (s.path.clone(), (s, f)))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Parses `f`, extending its cached parse when the file only grew (A14a).
+fn load_one(
+    f: &ScannedFile,
+    cached: Option<(FileState, LoadedFile)>,
+) -> io::Result<(FileState, LoadedFile)> {
+    match cached {
+        Some((mut st, mut lf)) if st.matches(f) => {
+            extend_loaded(&mut st, &mut lf)?;
+            Ok((st, lf))
+        }
+        _ => load_fresh(f),
+    }
+}
+
+/// Parsed main files (in `main` order), reusing and extending cached ones.
+fn load_main(
+    main: &[ScannedFile],
+    cached: Option<(Vec<FileState>, Vec<LoadedFile>)>,
+) -> io::Result<(Vec<FileState>, Vec<LoadedFile>)> {
+    let mut old = cached_files(cached);
+    let mut states = Vec::with_capacity(main.len());
+    let mut files = Vec::with_capacity(main.len());
+    for f in main {
+        let (st, lf) = load_one(f, old.remove(&f.path))?;
+        states.push(st);
+        files.push(lf);
+    }
+    Ok((states, files))
+}
+
+fn sort_main(main: &mut [ScannedFile]) {
+    main.sort_by(|a, b| b.size.cmp(&a.size).then_with(|| a.path.cmp(&b.path)));
+}
+
+fn workflow_entry<'a>(
+    map: &'a mut BTreeMap<String, WorkflowFiles>,
+    run_id: &str,
+) -> &'a mut WorkflowFiles {
+    map.entry(run_id.to_owned())
+        .or_insert_with(|| WorkflowFiles {
+            run_id: run_id.to_owned(),
+            workflow_json: None,
+            journal_jsonl: None,
+        })
+}
+
+// -------------------------------------------------------------------- sync planning
+
+/// A file whose rows must be (re)read from `from`.
+struct Ingest {
+    file: ScannedFile,
+    from: u64,
+    /// The current row (append); `None` for a new file or a reparse.
+    existing: Option<FileRecord>,
+}
+
+/// Work for one dirty session.
+struct SessionPlan {
+    sid: String,
+    /// Delete every row of the session first and re-ingest all its files from 0.
+    reparse: bool,
+    ingest: Vec<Ingest>,
+    /// (file id, size, mtime) for files whose stat changed without new complete lines.
+    stat_only: Vec<(i64, u64, i64)>,
+    /// Recompute the session row (false when only stat columns change).
+    recompute: bool,
+    /// Every current file of the session.
+    current: Vec<ScannedFile>,
+    sidecars: Vec<SidecarFile>,
+}
+
+impl SessionPlan {
+    fn ingest_bytes(&self) -> u64 {
+        self.ingest
+            .iter()
+            .map(|i| i.file.size.saturating_sub(i.from))
+            .sum()
+    }
+
+    /// Rough parse cost: ingested bytes plus main files that may need a full load.
+    fn cost(&self) -> u64 {
+        let main: u64 = self
+            .current
+            .iter()
+            .filter(|f| f.role == FileRole::Main)
+            .map(|f| f.size)
+            .sum();
+        self.ingest_bytes() + if self.recompute { main } else { 0 }
+    }
+}
+
+enum FileAction {
+    Unchanged,
+    StatOnly,
+    Append,
+    Reparse,
+}
+
+fn classify(f: &ScannedFile, row: &FileRecord) -> FileAction {
+    if f.dev != row.dev || f.ino != row.ino || f.size < row.parsed_offset {
+        return FileAction::Reparse;
+    }
+    if f.size == row.size && f.mtime_ns == row.mtime_ns {
+        return FileAction::Unchanged;
+    }
+    match read_head(&f.path, row.head.len()) {
+        Ok(head) if head == row.head => {}
+        _ => return FileAction::Reparse,
+    }
+    if f.size > row.parsed_offset {
+        FileAction::Append
+    } else {
+        FileAction::StatOnly
+    }
+}
+
+/// Diffs the scan against the `files` rows: dirty session plans (sorted by id) and the sessions
+/// whose last file disappeared.
+fn plan_sync(
+    scan: &ScanResult,
+    db: Vec<FileRecord>,
+    sidecar_dirty: &HashSet<String>,
+) -> (Vec<SessionPlan>, Vec<String>) {
+    let mut db_by_path: HashMap<String, FileRecord> =
+        db.into_iter().map(|r| (r.path.clone(), r)).collect();
+    let mut current: BTreeMap<String, Vec<ScannedFile>> = BTreeMap::new();
+    for f in &scan.files {
+        current
+            .entry(f.session_id.clone())
+            .or_default()
+            .push(f.clone());
+    }
+    let mut sidecars: HashMap<String, Vec<SidecarFile>> = HashMap::new();
+    for s in &scan.sidecars {
+        sidecars
+            .entry(s.session_id.clone())
+            .or_default()
+            .push(s.clone());
+    }
+
+    #[derive(Default)]
+    struct Acc {
+        reparse: bool,
+        recompute: bool,
+        ingest: Vec<Ingest>,
+        stat_only: Vec<(i64, u64, i64)>,
+    }
+    let mut acc: BTreeMap<String, Acc> = BTreeMap::new();
+    for f in &scan.files {
+        let key = f.path.to_string_lossy().into_owned();
+        let a = acc.entry(f.session_id.clone()).or_default();
+        match db_by_path.remove(&key) {
+            None => {
+                a.recompute = true;
+                a.ingest.push(Ingest {
+                    file: f.clone(),
+                    from: 0,
+                    existing: None,
+                });
+            }
+            Some(row) => match classify(f, &row) {
+                FileAction::Unchanged => {}
+                FileAction::StatOnly => a.stat_only.push((row.id, f.size, f.mtime_ns)),
+                FileAction::Append => {
+                    a.recompute = true;
+                    a.ingest.push(Ingest {
+                        file: f.clone(),
+                        from: row.parsed_offset,
+                        existing: Some(row),
+                    });
+                }
+                FileAction::Reparse => a.reparse = true,
+            },
+        }
+    }
+    // Rows whose file is gone: reparse the session if other files survive (A7), else remove it.
+    let mut removed = Vec::new();
+    for row in db_by_path.into_values() {
+        if current.contains_key(&row.session_id) {
+            acc.entry(row.session_id).or_default().reparse = true;
+        } else if !removed.contains(&row.session_id) {
+            removed.push(row.session_id);
+        }
+    }
+    for sid in sidecar_dirty {
+        if current.contains_key(sid) {
+            acc.entry(sid.clone()).or_default().recompute = true;
+        }
+    }
+    removed.sort();
+
+    let mut plans = Vec::new();
+    for (sid, a) in acc {
+        if !a.reparse && !a.recompute && a.stat_only.is_empty() {
+            continue;
+        }
+        let files = current.remove(&sid).unwrap_or_default();
+        let ingest = if a.reparse {
+            files
+                .iter()
+                .map(|f| Ingest {
+                    file: f.clone(),
+                    from: 0,
+                    existing: None,
+                })
+                .collect()
+        } else {
+            a.ingest
+        };
+        plans.push(SessionPlan {
+            reparse: a.reparse,
+            recompute: a.reparse || a.recompute,
+            stat_only: if a.reparse { Vec::new() } else { a.stat_only },
+            ingest,
+            current: files,
+            sidecars: sidecars.remove(&sid).unwrap_or_default(),
+            sid,
+        });
+    }
+    (plans, removed)
+}
+
+/// Splits plans into batches of about [`BATCH_BYTES`] parse cost.
+fn batches(plans: Vec<SessionPlan>) -> Vec<Vec<SessionPlan>> {
+    let mut out: Vec<Vec<SessionPlan>> = Vec::new();
+    let mut cur = Vec::new();
+    let mut bytes = 0u64;
+    for p in plans {
+        let c = p.cost();
+        if !cur.is_empty() && bytes + c > BATCH_BYTES {
+            out.push(std::mem::take(&mut cur));
+            bytes = 0;
+        }
+        bytes += c;
+        cur.push(p);
+    }
+    if !cur.is_empty() {
+        out.push(cur);
+    }
+    out
+}
+
+// -------------------------------------------------------------------- per-session compute
+
+struct FileOut {
+    file: ScannedFile,
+    rows: FileRows,
+    head: Vec<u8>,
+    parsed_offset: u64,
+    line_count: u64,
+    failed_lines: u64,
+    first_error: Option<String>,
+}
+
+struct SessionSummaryOut {
+    agg: SessionAggregates,
+    project: ProjectRow,
+    /// Newest main-file mtime (ms), used when no entry has a timestamp.
+    mtime_ms: f64,
+}
+
+struct SessionWork {
+    sid: String,
+    reparse: bool,
+    recompute: bool,
+    files: Vec<FileOut>,
+    stat_only: Vec<(i64, u64, i64)>,
+    /// `None` when the session has no readable main file.
+    summary: Option<SessionSummaryOut>,
+    agents: Vec<AgentRow>,
+    subagent_count: u32,
+    main_set: Option<HashSet<String>>,
+    cache: Option<CachedSession>,
+    bytes: u64,
+}
+
+/// Reads and parses a dirty session's files (no DB access; runs on the rayon pool).
+fn compute_session(
+    plan: SessionPlan,
+    cached: Option<CachedSession>,
+    keep: bool,
+    need_main_set: bool,
+) -> SessionWork {
+    let mut work = SessionWork {
+        bytes: plan.ingest_bytes(),
+        sid: plan.sid.clone(),
+        reparse: plan.reparse,
+        recompute: plan.recompute,
+        files: Vec::new(),
+        stat_only: plan.stat_only,
+        summary: None,
+        agents: Vec::new(),
+        subagent_count: 0,
+        main_set: None,
+        cache: None,
+    };
+    if !plan.recompute {
+        // Only stat columns change; hand a cached entry back untouched.
+        work.cache = cached;
+        return work;
+    }
+    let ingest: HashMap<&Path, &Ingest> = plan
+        .ingest
+        .iter()
+        .map(|i| (i.file.path.as_path(), i))
+        .collect();
+
+    // Main files: always fully parsed (the skeleton needs every record); rows come from the
+    // records at or after the ingest offset.
+    let mut main: Vec<ScannedFile> = plan
+        .current
+        .iter()
+        .filter(|f| f.role == FileRole::Main)
+        .cloned()
+        .collect();
+    sort_main(&mut main);
+    // A reparse means some file was rewritten: never reuse its parse.
+    let cached = cached.filter(|_| !plan.reparse);
+    let mut old = cached_files(cached.map(CachedSession::into_parts));
+    let mut states = Vec::new();
+    let mut loaded = Vec::new();
+    for f in &main {
+        let Ok((st, lf)) = load_one(f, old.remove(&f.path)) else {
+            tracing::warn!(path = %f.path.display(), "读取会话文件失败");
+            continue;
+        };
+        if let Some(ing) = ingest.get(f.path.as_path())
+            && let Ok(head) = read_head(&f.path, HEAD_LEN)
+        {
+            work.files.push(FileOut {
+                file: f.clone(),
+                rows: writer::extract_rows(lf.records.iter().filter(|r| r.offset >= ing.from)),
+                head,
+                parsed_offset: st.consumed,
+                line_count: lf.records.len() as u64 + u64::from(st.failed),
+                failed_lines: u64::from(st.failed),
+                first_error: st.first_error.clone(),
+            });
+        }
+        states.push(st);
+        loaded.push(lf);
+    }
+
+    // Agent files: only the new bytes are read.
+    let mut agents: BTreeMap<String, AgentRow> = BTreeMap::new();
+    for f in plan.current.iter().filter(|f| f.role != FileRole::Main) {
+        let Some(aid) = &f.agent_id else { continue };
+        agents.insert(
+            aid.clone(),
+            AgentRow {
+                agent_id: aid.clone(),
+                workflow_run_id: f.workflow_run_id.clone(),
+                ..AgentRow::default()
+            },
+        );
+        let Some(ing) = ingest.get(f.path.as_path()) else {
+            continue;
+        };
+        let (Ok((chunk, _)), Ok(head)) =
+            (read_chunk(&f.path, ing.from), read_head(&f.path, HEAD_LEN))
+        else {
+            tracing::warn!(path = %f.path.display(), "读取 Subagent 文件失败");
+            continue;
+        };
+        let (lines0, failed0, err0) = ing.existing.as_ref().map_or((0, 0, None), |e| {
+            (e.line_count, e.failed_lines, e.first_error.clone())
+        });
+        work.files.push(FileOut {
+            file: f.clone(),
+            rows: writer::extract_rows(&chunk.records),
+            head,
+            parsed_offset: chunk.consumed_to,
+            line_count: lines0 + chunk.records.len() as u64 + u64::from(chunk.failed),
+            failed_lines: failed0 + u64::from(chunk.failed),
+            first_error: err0.or(chunk.first_error),
+        });
+    }
+    work.subagent_count = agents.len() as u32;
+    for s in &plan.sidecars {
+        if let SidecarKind::AgentMeta {
+            agent_id,
+            workflow_run_id,
+            ..
+        } = &s.kind
+        {
+            let row = agents.entry(agent_id.clone()).or_insert_with(|| AgentRow {
+                agent_id: agent_id.clone(),
+                workflow_run_id: workflow_run_id.clone(),
+                ..AgentRow::default()
+            });
+            *row = std::mem::take(row).with_meta(read_text(&s.path).as_deref());
+        }
+    }
+    work.agents = agents.into_values().collect();
+
+    if !loaded.is_empty() {
+        let skeleton = assemble::build_skeleton(&loaded);
+        let agg = assemble::summarize(&skeleton);
+        if need_main_set {
+            work.main_set = Some(assemble::tree::main_set(&skeleton));
+        }
+        let cwd = agg.cwd.clone().or_else(|| {
+            loaded
+                .iter()
+                .flat_map(|f| &f.records)
+                .find_map(|r| r.entry.cwd.clone())
+        });
+        let mtime_ms = main.iter().map(|f| f.mtime_ns).max().unwrap_or(0) as f64 / 1e6;
+        work.summary = Some(SessionSummaryOut {
+            project: project_for(cwd.as_deref(), &main[0].path),
+            agg: SessionAggregates { cwd, ..agg },
+            mtime_ms,
+        });
+    }
+    if keep && !loaded.is_empty() {
+        work.cache = Some(CachedSession {
+            states,
+            body: Body::Files(loaded),
+        });
+    }
+    work
+}
+
+/// Project of a session: the realpath of its start cwd; the raw cwd (flagged missing) when the
+/// directory no longer exists; the encoded project dir when no entry carries a cwd.
+fn project_for(cwd: Option<&str>, main_file: &Path) -> ProjectRow {
+    let (id, missing) = match cwd.filter(|c| !c.is_empty()) {
+        Some(c) => match std::fs::canonicalize(c) {
+            Ok(real) => (real.to_string_lossy().into_owned(), false),
+            Err(_) => (c.to_owned(), true),
+        },
+        None => (
+            main_file
+                .parent()
+                .unwrap_or(main_file)
+                .to_string_lossy()
+                .into_owned(),
+            false,
+        ),
+    };
+    let display_name = Path::new(&id)
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| id.clone());
+    ProjectRow {
+        path: id.clone(),
+        id,
+        display_name,
+        missing,
+    }
+}
+
+// -------------------------------------------------------------------- write
+
+/// `is_empty` of an existing session row.
+fn session_exists(conn: &Connection, sid: &str) -> CoreResult<Option<bool>> {
+    Ok(conn
+        .prepare_cached("SELECT is_empty FROM sessions WHERE id=?1")?
+        .query_row([sid], |r| r.get::<_, bool>(0))
+        .optional()?)
+}
+
+fn write_work(conn: &Connection, w: &SessionWork, cs: &mut ChangeSet) -> CoreResult<()> {
+    for (id, size, mtime) in &w.stat_only {
+        writer::write_file_stat(conn, *id, *size, *mtime)?;
+    }
+    if !w.recompute {
+        return Ok(());
+    }
+    let before = session_exists(conn, &w.sid)?;
+    if w.reparse {
+        writer::delete_session(conn, &w.sid)?;
+    }
+    for f in &w.files {
+        let path = f.file.path.to_string_lossy();
+        let id = writer::write_file(
+            conn,
+            &FileWrite {
+                path: &path,
+                dev: f.file.dev,
+                ino: f.file.ino,
+                role: f.file.role,
+                session_id: &w.sid,
+                agent_id: f.file.agent_id.as_deref(),
+                size: f.file.size,
+                mtime_ns: f.file.mtime_ns,
+                head: &f.head,
+                parsed_offset: f.parsed_offset,
+                line_count: f.line_count,
+                failed_lines: f.failed_lines,
+                first_error: f.first_error.as_deref(),
+            },
+        )?;
+        // Phase-2 hook (T3.3): text docs for `[text_offset, parsed_offset)` are extracted by
+        // `index::text::index_pending`; `text_offset` is deliberately left untouched here.
+        writer::write_rows(
+            conn,
+            id,
+            &w.sid,
+            f.file.agent_id.as_deref().unwrap_or(""),
+            &f.rows,
+        )?;
+    }
+    let Some(s) = &w.summary else {
+        if before.is_some() {
+            conn.execute("DELETE FROM sessions WHERE id=?1", [&w.sid])?;
+            cs.removed.push(w.sid.clone());
+            cs.projects_changed = true;
+        }
+        return Ok(());
+    };
+    writer::write_subagents(conn, &w.sid, &w.agents)?;
+    let agent_tok = writer::agent_token_totals(conn, &w.sid)?;
+    let a = &s.agg;
+    let main_tok = a.tokens.clone();
+    let row = SessionRow {
+        id: w.sid.clone(),
+        project_id: s.project.id.clone(),
+        cwd: a.cwd.clone(),
+        title: a.title.clone(),
+        title_source: a.title_source,
+        first_prompt: a.first_prompt.clone(),
+        created_ms: a.created_ms,
+        last_active_ms: if a.last_active_ms > 0.0 {
+            a.last_active_ms
+        } else {
+            s.mtime_ms
+        },
+        duration_ms: a.duration_ms,
+        message_count: a.message_count,
+        tool_call_count: a.tool_call_count,
+        subagent_count: w.subagent_count,
+        tokens: TokenTotals {
+            input: main_tok.input + agent_tok.input,
+            output: main_tok.output + agent_tok.output,
+            cache_read: main_tok.cache_read + agent_tok.cache_read,
+            cache_creation: main_tok.cache_creation + agent_tok.cache_creation,
+        },
+        main_tokens: main_tok,
+        git_branch: a.git_branch.clone(),
+        primary_model: a.primary_model.clone(),
+        models: a.models.clone(),
+        versions: a.versions.clone(),
+        leaf_uuid: a.leaf_uuid.clone(),
+        root_uuid: a.root_uuid.clone(),
+        fork_origin_id: a.fork_origin_id.clone(),
+        fork_point_uuid: a.fork_point_uuid.clone(),
+        is_empty: a.is_empty,
+    };
+    writer::write_session(conn, &row)?;
+    if writer::write_project(conn, &s.project)? || before != Some(a.is_empty) {
+        cs.projects_changed = true;
+    }
+    if let Some(ms) = &w.main_set
+        && writer::has_text_rows(conn, &w.sid)?
+    {
+        writer::write_on_main_line(conn, &w.sid, ms)?;
+    }
+    cs.changed.push(w.sid.clone());
+    Ok(())
 }
 
 #[cfg(test)]
@@ -167,5 +1548,16 @@ mod tests {
         let info = engine.app_info();
         assert!(!info.data_root_exists);
         assert_eq!(info.schema_version, SCHEMA_VERSION);
+        assert_eq!(engine.scan_all(&|_| {}).unwrap(), ChangeSet::default());
+    }
+
+    #[test]
+    fn lru_keeps_most_recent() {
+        let mut l = Lru::new(2);
+        l.put(1, "a");
+        l.put(2, "b");
+        l.put(3, "c");
+        assert_eq!(l.take(&1), None);
+        assert_eq!(l.take(&3), Some("c"));
     }
 }
