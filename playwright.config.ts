@@ -1,12 +1,15 @@
 import { defineConfig, devices } from "@playwright/test";
 
+// E2E_PORT lets several local runs (e.g. parallel worktrees/agents) use separate dev servers.
+const port = Number(process.env.E2E_PORT ?? 1421);
+
 export default defineConfig({
   testDir: "e2e",
-  use: { baseURL: "http://localhost:1421" },
+  use: { baseURL: `http://localhost:${port}` },
   projects: [{ name: "webkit", use: { ...devices["Desktop Safari"] } }],
   webServer: {
-    command: "pnpm dev:mock --port 1421",
-    url: "http://localhost:1421",
+    command: `pnpm dev:mock --port ${port}`,
+    url: `http://localhost:${port}`,
     reuseExistingServer: !process.env.CI,
   },
 });
