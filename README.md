@@ -7,6 +7,18 @@
 - **实时**：监听文件变化，新 Session 自动出现；正在进行的 Session 实时追随。
 - **统计**：按模型的每日 token、活跃热力图、Project 排行、工具调用与失败率、Subagent 使用，图表可下钻到 Session 列表。
 
+## 快捷键
+
+| 按键 | 作用 |
+|---|---|
+| ⌘K | 全局搜索 |
+| ⌘F | 在当前 Session 内查找（Enter / ⇧Enter 上下跳转） |
+| `j` / `k` | 跳到下一个 / 上一个你的输入 |
+| ⌘↑ / ⌘↓ | 跳到对话顶部 / 底部 |
+| ↑ / ↓ | 在 Session 列表中切换（列表获得焦点时） |
+| ⌘, | 设置（数据目录、格式兼容性诊断、重建索引） |
+| Esc | 关闭搜索、查找或 Subagent 面板 |
+
 术语见 [CONTEXT.md](CONTEXT.md)，完整规格见 [docs/spec.md](docs/spec.md)，关键取舍见 [docs/adr/](docs/adr/)。
 
 ## 只读保证
@@ -19,6 +31,8 @@
 | 设置（数据目录覆盖） | `~/Library/Application Support/dev.joy.claude-viewer/settings.json` |
 
 索引只镜像数据目录当前内容：源文件被删，对应 Session 也随之消失；升级后索引格式变化会自动重建（[ADR-0003](docs/adr/0003-index-is-disposable-mirror.md)）。索引放在 Caches 中，不进入 Time Machine 备份。
+
+首次启动时先扫描元数据（3 GB 数据约 2–3 秒），列表即可浏览；全文索引在后台建立（约 2–3 分钟，索引约 760 MB），期间状态栏显示进度，搜索结果不完整。工具输出不进索引，勾选「包含工具输出」时实时扫描（[ADR-0004](docs/adr/0004-tool-output-scanned-not-indexed.md)）。
 
 ## 数据目录
 
@@ -55,6 +69,15 @@ pnpm typecheck && pnpm test                             # 前端类型检查与�
 pnpm exec playwright install webkit && pnpm test:e2e    # E2E（mock 模式，WebKit）
 ```
 
+- `E2E_PORT=<端口>`：E2E 的 mock 开发服务器端口（默认 1421），并行跑多份 E2E 时各用一个。
+- `CV_FIXTURE_DENYLIST="词1,词2"`：fixture 脱敏检查额外拦截的私有词（如公司、客户名），不写进仓库。
+- 真实数据探针（只读，索引写入临时目录），用于检查性能与兼容性：
+
+```sh
+CV_REAL_ROOT=~/.claude cargo test -p cv-core --release --test assemble -- --ignored --nocapture   # 组装全部 Session
+CV_BENCH_ROOT=~/.claude cargo test -p cv-core --release --test search -- --ignored --nocapture    # 建全文索引并测查询耗时
+```
+
 `crates/cv-core/tests/fixtures/` 是从真实 Session 精简、脱敏得到的结构样本（见其中的 README），由 `crates/cv-core/examples/sanitize.rs` 生成。
 
 ## 构建
@@ -64,6 +87,8 @@ pnpm tauri build --bundles app --target aarch64-apple-darwin
 ```
 
 产物在 `target/aarch64-apple-darwin/release/bundle/macos/Claude Viewer.app`，使用 ad-hoc 签名、未公证；首次打开如被 Gatekeeper 拦截，右键选择「打开」。
+
+在 macOS 27 上，`tauri build` 设置的 `MACOSX_DEPLOYMENT_TARGET=14.0` 会让 cargo strip 后的 proc-macro 动态库无法加载（`mis-aligned LINKEDIT string pool`），因此 `Cargo.toml` 中对 `profile.release.build-override` 关闭了 strip，不影响最终应用。
 
 ## 结构
 

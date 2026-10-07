@@ -32,6 +32,10 @@ _Avoid_: Fork（Fork 是跨 Session 的）, 版本, 分叉会话
 Session 中从第一条消息走到最新叶子消息的那条 Branch，即用户在终端里最终看到的对话。
 _Avoid_: 主分支, 当前分支, trunk
 
+**Teammate Message**:
+Session 中由另一个 Claude Session（agent team 的成员）发来的消息；它以用户消息的形式记录，但不是用户输入。
+_Avoid_: 用户消息, peer message, 队友输入
+
 **Fork**:
 从另一个 Session 复制了部分历史后继续进行的新 Session；被复制的那个称为它的 **Origin Session**。
 _Avoid_: 分支, 副本, resume（resume 不产生新 Session 时不算 Fork）
