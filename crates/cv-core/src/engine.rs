@@ -292,7 +292,7 @@ impl Engine {
                 .collect(),
             forks,
             failed_lines: failed as u32,
-            resume_command: format!("claude --resume {id}"),
+            resume_command: format!("claude --resume {}", shell_quote(id)),
         })
     }
 
@@ -1571,8 +1571,32 @@ fn write_work(conn: &Connection, w: &SessionWork, cs: &mut ChangeSet) -> CoreRes
     Ok(())
 }
 
+/// Quotes a session id for pasting into a shell; ids come from file names, so anything beyond
+/// the usual UUID alphabet is single-quoted.
+fn shell_quote(id: &str) -> String {
+    if !id.is_empty()
+        && id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+    {
+        id.to_owned()
+    } else {
+        format!("'{}'", id.replace('\'', "'\\''"))
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn resume_command_quotes_unusual_ids() {
+        assert_eq!(
+            super::shell_quote("6f1c2d3e-4a5b-4c6d-8e7f-0a1b2c3d4e5f"),
+            "6f1c2d3e-4a5b-4c6d-8e7f-0a1b2c3d4e5f"
+        );
+        assert_eq!(super::shell_quote("x; rm -rf ~"), "'x; rm -rf ~'");
+        assert_eq!(super::shell_quote("a'b"), "'a'\\''b'");
+    }
+
     use super::*;
 
     #[test]

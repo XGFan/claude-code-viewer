@@ -186,10 +186,14 @@ struct Source {
 
 fn image_data(source: Option<&RawValue>) -> Option<ImageData> {
     let src: Source = serde_json::from_str(source?.get()).ok()?;
+    // The type ends up in a `data:` URL; only pass through raster formats an <img> renders.
+    const IMAGE_TYPES: &[&str] = &["image/png", "image/jpeg", "image/gif", "image/webp"];
+    let media_type = src
+        .media_type
+        .filter(|m| IMAGE_TYPES.contains(&m.as_str()))
+        .unwrap_or_else(|| "application/octet-stream".to_owned());
     Some(ImageData {
-        media_type: src
-            .media_type
-            .unwrap_or_else(|| "application/octet-stream".to_owned()),
+        media_type,
         data_base64: src.data?,
     })
 }
