@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import type { BranchChoice, Drill, JumpTarget, SessionSort, TranscriptScope } from "@/ipc/bindings";
+import type { BranchChoice, Drill, JumpTarget, SessionSort, TimeRange, TranscriptScope } from "@/ipc/bindings";
 
 export type View = "sessions" | "stats" | "diagnostics";
 
@@ -42,6 +42,8 @@ interface UiState {
   sessionSort: SessionSort;
   sessionDescending: boolean;
   statsDrill: Drill | null;
+  /** Time range of the stats view a drill came from; applied to the session list only while the drill is active. */
+  statsDrillRange: TimeRange | null;
   settingsOpen: boolean;
 
   setView: (view: View) => void;
@@ -67,7 +69,7 @@ interface UiState {
   toggleExpanded: (key: string, defaultValue?: boolean) => void;
   setExpanded: (key: string, value: boolean) => void;
   setSessionSort: (sort: SessionSort, descending?: boolean) => void;
-  setStatsDrill: (drill: Drill | null) => void;
+  setStatsDrill: (drill: Drill | null, range?: TimeRange | null) => void;
   setSettingsOpen: (open: boolean) => void;
 }
 
@@ -81,6 +83,7 @@ export const useUi = create<UiState>()((set) => ({
   sessionSort: "lastActive",
   sessionDescending: true,
   statsDrill: null,
+  statsDrillRange: null,
   settingsOpen: false,
 
   setView: (view) => set({ view }),
@@ -111,6 +114,6 @@ export const useUi = create<UiState>()((set) => ({
   setExpanded: (key, value) => set((s) => ({ expanded: { ...s.expanded, [key]: value } })),
   setSessionSort: (sessionSort, descending) =>
     set((s) => ({ sessionSort, sessionDescending: descending ?? s.sessionDescending })),
-  setStatsDrill: (statsDrill) => set({ statsDrill }),
+  setStatsDrill: (statsDrill, range = null) => set({ statsDrill, statsDrillRange: statsDrill ? range : null }),
   setSettingsOpen: (settingsOpen) => set({ settingsOpen }),
 }));

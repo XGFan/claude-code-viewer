@@ -199,7 +199,7 @@ export function StatsPanel() {
   const drill = (d: Drill | null, ids: string[] = projectIds) => {
     const ui = useUi.getState();
     ui.setProjectIds(ids);
-    ui.setStatsDrill(d);
+    ui.setStatsDrill(d, timeRange);
     ui.selectSession(null);
     ui.setView("sessions");
   };

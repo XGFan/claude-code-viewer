@@ -41,3 +41,19 @@ test("点击工具行按 tool 下钻会话列表", async ({ page }) => {
   await expect(chip).toHaveCount(0);
   await expect.poll(() => page.getByTestId("session-row").count()).toBeGreaterThanOrEqual(filtered);
 });
+
+test("下钻带上统计的时间范围", async ({ page }) => {
+  await page.goto("/");
+  const review = page.getByTestId("session-row").filter({ hasText: "/review 订单列表页" }); // last active 8 days ago
+
+  await page.getByTestId("nav-stats").click();
+  await page.getByRole("group", { name: "时间范围" }).getByRole("button", { name: "全部" }).click();
+  await page.getByTestId("tool-row").filter({ hasText: /^Read/ }).click();
+  await expect(review).toBeVisible();
+
+  await page.getByTestId("nav-stats").click();
+  await page.getByRole("button", { name: "7 天" }).click();
+  await page.getByTestId("tool-row").filter({ hasText: /^Read/ }).click();
+  await expect(page.getByTestId("drill-chip")).toBeVisible();
+  await expect(review).toHaveCount(0);
+});
