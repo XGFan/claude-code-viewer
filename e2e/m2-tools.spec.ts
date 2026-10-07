@@ -12,7 +12,17 @@ async function openRich(page: Page) {
 async function reveal(page: Page, target: Locator) {
   const transcript = page.getByTestId("transcript");
   await expect(transcript.locator("[data-row]").first()).toBeVisible();
-  await transcript.evaluate((e) => (e.scrollTop = 0));
+  // Resolve only once the scroll event has fired: the virtualizer re-renders in its scroll handler, so until
+  // then the rows of the previous position (the session opens at the bottom) are still mounted and
+  // `target.count()` would match a row that unmounts right after.
+  await transcript.evaluate(
+    (e) =>
+      new Promise<void>((done) => {
+        if (e.scrollTop === 0) return done();
+        e.addEventListener("scroll", () => done(), { once: true });
+        e.scrollTop = 0;
+      }),
+  );
   for (let i = 0; i < 200 && (await target.count()) === 0; i++) {
     const closed = transcript.locator('[data-testid="tool-group"]:not([data-open]) > button');
     if ((await closed.count()) > 0) await closed.first().click();
