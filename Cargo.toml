@@ -37,3 +37,9 @@ tauri-plugin-clipboard-manager = "2.4.1"
 notify = "8.2.0"
 notify-debouncer-full = "0.7.0"
 tracing-subscriber = "0.3.23"
+
+# On macOS 27 (ld-27037), proc-macro dylibs that cargo strips in release builds with
+# MACOSX_DEPLOYMENT_TARGET >= 14 (set by `tauri build` from minimumSystemVersion) fail to
+# load in rustc ("mis-aligned LINKEDIT string pool"). Keep build-time artifacts unstripped.
+[profile.release.build-override]
+strip = "none"
