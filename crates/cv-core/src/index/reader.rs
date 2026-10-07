@@ -6,6 +6,7 @@ use chrono::{Datelike, Local, NaiveDate, TimeZone, Timelike};
 use rusqlite::types::Value;
 use rusqlite::{Connection, OptionalExtension, Row, params, params_from_iter};
 
+use super::schema::MSG_ASSISTANT;
 use super::writer::{role_from_db, title_source_from_db};
 use crate::assemble::AgentStats;
 use crate::error::CoreResult;
@@ -13,6 +14,7 @@ use crate::model::{
     Drill, FileRole, ForkChild, ForkOrigin, ProjectSummary, SessionQuery, SessionSort,
     SessionSummary, TokenTotals,
 };
+use crate::stats;
 
 /// A `files` row.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -178,6 +180,13 @@ fn summary_from_row(r: &Row) -> rusqlite::Result<SessionSummary> {
 }
 
 /// Non-empty sessions matching `q` (live filtering and `live` states are applied by the engine).
+///
+/// Without a drill, the time range keeps sessions whose span overlaps it. With a drill, the
+/// session must have a contributing row inside the range, mirroring `stats::compute` exactly:
+/// - `Day` / `WeekHour`: a main-file message at that local day / weekday×hour;
+/// - `Model`: a main or Subagent message of that model that carries tokens;
+/// - `Tool`: a main or Subagent tool call of that name;
+/// - `AgentType`: a Subagent Run of that type (range on its start time).
 pub fn list_sessions(conn: &Connection, q: &SessionQuery) -> CoreResult<Vec<SessionSummary>> {
     let mut conds = vec!["s.is_empty = 0".to_owned()];
     let mut args: Vec<Value> = Vec::new();
@@ -186,7 +195,21 @@ pub fn list_sessions(conn: &Connection, q: &SessionQuery) -> CoreResult<Vec<Sess
         conds.push(format!("s.project_id IN ({marks})"));
         args.extend(q.project_ids.iter().map(|p| Value::Text(p.clone())));
     }
-    if let Some(tr) = &q.time_range {
+    let (from, to) = stats::range_bounds(q.time_range.as_ref());
+    // `AND <col> BETWEEN from AND to` for drill rows (only when a range is set, so rows without
+    // a timestamp still count otherwise).
+    let ranged = q.time_range.is_some();
+    let in_range = |col: &str, args: &mut Vec<Value>| {
+        if !ranged {
+            return String::new();
+        }
+        args.push(Value::Integer(from));
+        args.push(Value::Integer(to));
+        format!(" AND {col} >= ? AND {col} <= ?")
+    };
+    if q.drill.is_none()
+        && let Some(tr) = &q.time_range
+    {
         if let Some(from) = tr.from_ms {
             conds.push("s.last_active_ms >= ?".into());
             args.push(Value::Integer(from as i64));
@@ -198,39 +221,43 @@ pub fn list_sessions(conn: &Connection, q: &SessionQuery) -> CoreResult<Vec<Sess
     }
     let mut week_hour = None;
     match &q.drill {
-        Some(Drill::Day { day }) => {
-            if let Some((from, to)) = local_day_bounds_ms(day) {
+        Some(Drill::Day { day }) => match local_day_bounds_ms(day) {
+            Some((start, end)) => {
                 conds.push(
-                    "EXISTS (SELECT 1 FROM messages m WHERE m.session_id = s.id AND m.agent_id = ''
-                        AND m.ts_ms >= ? AND m.ts_ms < ?)"
+                    "s.id IN (SELECT m.session_id FROM messages m WHERE m.agent_id = ''
+                        AND m.ts_ms >= ? AND m.ts_ms <= ?)"
                         .into(),
                 );
-                args.push(Value::Integer(from));
-                args.push(Value::Integer(to));
-            } else {
-                conds.push("0".into());
+                args.push(Value::Integer(start.max(from)));
+                args.push(Value::Integer((end - 1).min(to)));
             }
-        }
+            None => conds.push("0".into()),
+        },
         Some(Drill::Model { model }) => {
-            conds.push(
-                "EXISTS (SELECT 1 FROM messages m WHERE m.session_id = s.id AND m.model = ?)"
-                    .into(),
-            );
+            args.push(Value::Text(stats::UNKNOWN.to_owned()));
             args.push(Value::Text(model.clone()));
+            let range = in_range("m.ts_ms", &mut args);
+            conds.push(format!(
+                "EXISTS (SELECT 1 FROM messages m WHERE m.session_id = s.id
+                    AND coalesce(m.model, ?) = ? AND m.role = {MSG_ASSISTANT}
+                    AND (m.in_tok > 0 OR m.out_tok > 0 OR m.cr_tok > 0 OR m.cc_tok > 0){range})"
+            ));
         }
         Some(Drill::Tool { name }) => {
-            conds.push(
-                "EXISTS (SELECT 1 FROM tool_calls t WHERE t.session_id = s.id AND t.name = ?)"
-                    .into(),
-            );
             args.push(Value::Text(name.clone()));
+            let range = in_range("t.ts_ms", &mut args);
+            conds.push(format!(
+                "s.id IN (SELECT t.session_id FROM tool_calls t WHERE t.name = ?{range})"
+            ));
         }
         Some(Drill::AgentType { agent_type }) => {
-            conds.push(
-                "EXISTS (SELECT 1 FROM subagents a WHERE a.session_id = s.id AND a.agent_type = ?)"
-                    .into(),
-            );
+            args.push(Value::Text(stats::UNKNOWN.to_owned()));
             args.push(Value::Text(agent_type.clone()));
+            let range = in_range("a.started_ms", &mut args);
+            conds.push(format!(
+                "EXISTS (SELECT 1 FROM subagents a WHERE a.session_id = s.id
+                    AND coalesce(a.agent_type, ?) = ?{range})"
+            ));
         }
         Some(Drill::WeekHour { weekday, hour }) => week_hour = Some((*weekday, *hour)),
         None => {}
@@ -250,7 +277,7 @@ pub fn list_sessions(conn: &Connection, q: &SessionQuery) -> CoreResult<Vec<Sess
     let rows = st.query_map(params_from_iter(args), summary_from_row)?;
     let mut out: Vec<SessionSummary> = rows.collect::<Result<_, _>>()?;
     if let Some((weekday, hour)) = week_hour {
-        let keep = sessions_in_week_hour(conn, weekday, hour)?;
+        let keep = sessions_in_week_hour(conn, weekday, hour, from, to)?;
         out.retain(|s| keep.contains(&s.id));
     }
     Ok(out)
@@ -269,21 +296,24 @@ fn local_day_bounds_ms(day: &str) -> Option<(i64, i64)> {
     Some((start.timestamp_millis(), end.timestamp_millis()))
 }
 
-/// Sessions with a main-file message at local `weekday` (0 = Monday) and `hour`.
+/// Sessions with a main-file message in `[from, to]` at local `weekday` (0 = Monday) and `hour`.
 fn sessions_in_week_hour(
     conn: &Connection,
     weekday: u32,
     hour: u32,
+    from: i64,
+    to: i64,
 ) -> CoreResult<HashSet<String>> {
-    let mut st = conn.prepare("SELECT session_id, ts_ms FROM messages WHERE agent_id = ''")?;
-    let mut rows = st.query([])?;
+    let mut st = conn.prepare(
+        "SELECT session_id, ts_ms FROM messages WHERE agent_id = '' AND ts_ms >= ?1 AND ts_ms <= ?2",
+    )?;
+    let mut rows = st.query([from, to])?;
     let mut out = HashSet::new();
     while let Some(r) = rows.next()? {
-        let ts: i64 = r.get(1)?;
-        let Some(dt) = Local.timestamp_millis_opt(ts).single() else {
+        let Some(t) = stats::local_time(r.get(1)?) else {
             continue;
         };
-        if dt.weekday().num_days_from_monday() == weekday && dt.hour() == hour {
+        if t.weekday().num_days_from_monday() == weekday && t.hour() == hour {
             out.insert(r.get::<_, String>(0)?);
         }
     }
