@@ -1,7 +1,7 @@
 //! DDL and schema version (plan §4).
 
 /// `PRAGMA user_version`; any mismatch deletes and recreates the index.
-pub const SCHEMA_VERSION: u32 = 1;
+pub const SCHEMA_VERSION: u32 = 2;
 
 /// `files.role`.
 pub const ROLE_MAIN: i64 = 0;
@@ -64,7 +64,7 @@ CREATE TABLE diag_counts (file_id INTEGER NOT NULL, category INTEGER NOT NULL,
   PRIMARY KEY (file_id, category, name, version)) WITHOUT ROWID;
 CREATE TABLE msg_text (id INTEGER PRIMARY KEY, file_id INTEGER NOT NULL, session_id TEXT NOT NULL, agent_id TEXT,
   node_uuid TEXT NOT NULL, block_idx INTEGER NOT NULL, role INTEGER NOT NULL,
-  ts_ms INTEGER, on_main_line INTEGER NOT NULL DEFAULT 1, body TEXT NOT NULL,
+  ts_ms INTEGER, on_main_line INTEGER NOT NULL DEFAULT 1, body TEXT NOT NULL, tool_use_id TEXT,
   UNIQUE (session_id, node_uuid, block_idx));
 CREATE INDEX msg_text_file ON msg_text(file_id);
 CREATE INDEX msg_text_session ON msg_text(session_id);

@@ -207,36 +207,9 @@ fn merge_message(into: &mut MessageRow, other: &MessageRow) {
     }
 }
 
-/// Human or command prompt: a `user` entry that is not meta, not a compact summary, not a tool
-/// result, not a task notification / peer message, and not injected local-command or
-/// system-reminder text.
+/// Human or command prompt (the assembly classifier, so `messages` agrees with `message_count`).
 pub fn is_human_prompt(e: &RawEntry) -> bool {
-    if e.entry_type() != "user"
-        || e.is_meta == Some(true)
-        || e.is_compact_summary == Some(true)
-        || e.is_tool_result()
-    {
-        return false;
-    }
-    if let Some(kind) = e.origin.as_ref().and_then(|o| o.kind.as_deref())
-        && kind != "human"
-    {
-        return false;
-    }
-    let text = match e.content_text() {
-        Some(t) => Some(t.to_owned()),
-        None => e
-            .blocks()
-            .iter()
-            .find(|b| b.block_type() == "text")
-            .and_then(|b| b.text_str()),
-    };
-    let Some(text) = text else {
-        // Image-only prompts still count.
-        return !e.blocks().is_empty();
-    };
-    let t = text.trim_start();
-    !(t.starts_with("<local-command") || t.starts_with("<system-reminder"))
+    crate::assemble::prompt::is_human_prompt(e)
 }
 
 const PERSISTED_TAG: &str = "<persisted-output>";

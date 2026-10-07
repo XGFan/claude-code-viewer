@@ -324,8 +324,13 @@ impl Engine {
     }
 
     pub fn search(&self, r: &SearchRequest) -> CoreResult<SearchResponse> {
-        let live: Vec<String> = self.live_map()?.into_keys().collect();
-        self.index.read(|c| search::run_fts(c, r, &live))
+        let live = self.live_map()?;
+        let ids: Vec<String> = live.keys().cloned().collect();
+        let mut resp = self.index.read(|c| search::run_fts(c, r, &ids))?;
+        for g in &mut resp.groups {
+            g.session.live = live.get(&g.session.id).cloned();
+        }
+        Ok(resp)
     }
 
     /// Streams tool-output hits into `sink` until done or `cancel` is set. Targets are the
@@ -357,28 +362,38 @@ impl Engine {
                         agent_id: f.agent_id.clone(),
                         path: PathBuf::from(&f.path),
                         kind: search::ScanTargetKind::Jsonl,
+                        tool_use_id: None,
                     });
                 }
                 let Some(dir) = session_dir else { continue };
                 let mut st = c.prepare_cached(
-                    "SELECT file_name, agent_id FROM persisted_outputs WHERE session_id=?1",
+                    "SELECT file_name, agent_id, tool_use_id FROM persisted_outputs
+                     WHERE session_id=?1",
                 )?;
                 let rows = st.query_map([&s.id], |row| {
-                    Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?))
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, Option<String>>(1)?,
+                        row.get::<_, String>(2)?,
+                    ))
                 })?;
                 for row in rows {
-                    let (name, agent_id) = row?;
+                    let (name, agent_id, tool_use_id) = row?;
+                    let Some(path) = assemble::content::persisted_path(&dir, &name) else {
+                        continue;
+                    };
                     out.push(search::ScanTarget {
                         session_id: s.id.clone(),
                         agent_id,
-                        path: dir.join("tool-results").join(name),
+                        path,
                         kind: search::ScanTargetKind::PersistedOutput,
+                        tool_use_id: Some(tool_use_id),
                     });
                 }
             }
             Ok(out)
         })?;
-        search::run_tool_output_scan(&self.cfg.data_root, targets, &q, cancel, sink)
+        search::run_tool_output_scan(targets, &sessions, r, &q, cancel, sink)
     }
 
     pub fn stats(&self, r: &StatsRequest) -> CoreResult<Stats> {
@@ -572,11 +587,31 @@ impl Engine {
     }
 
     /// A2: the Main Line set of a session, from its main files.
+    /// Reuses (and extends) a cached parse of the session, so live appends stay cheap.
     fn main_set_of(&self, sid: &str) -> CoreResult<HashSet<String>> {
         let ctx = self.session_ctx(sid)?;
-        let (_, files) = load_main(&ctx.main, None)?;
-        let skeleton = assemble::build_skeleton(&files);
-        Ok(assemble::tree::main_set(&skeleton))
+        let cached = self.sessions.lock().take(&sid.to_owned());
+        let Some(c) = cached else {
+            let (_, files) = load_main(&ctx.main, None)?;
+            return Ok(assemble::tree::main_set(&assemble::build_skeleton(&files)));
+        };
+        if let Body::Assembled(a) = &c.body
+            && a.revision == ctx.revision
+        {
+            let set = assemble::tree::main_set(&a.skeleton);
+            self.sessions.lock().put(sid.to_owned(), c);
+            return Ok(set);
+        }
+        let (states, files) = load_main(&ctx.main, Some(c.into_parts()))?;
+        let set = assemble::tree::main_set(&assemble::build_skeleton(&files));
+        self.sessions.lock().put(
+            sid.to_owned(),
+            CachedSession {
+                states,
+                body: Body::Files(files),
+            },
+        );
+        Ok(set)
     }
 
     // ---------------------------------------------------------------- display

@@ -71,6 +71,16 @@ pub fn is_human(e: &RawEntry, origin: &PromptOrigin) -> bool {
     kind_ok && matches!(origin, PromptOrigin::Human | PromptOrigin::Command { .. })
 }
 
+/// [`is_human`] for any entry: a `user` entry that is not a tool result or compact summary and
+/// classifies as a human or command prompt. Shared by assembly, the index and text extraction.
+pub fn is_human_prompt(e: &RawEntry) -> bool {
+    if e.entry_type() != "user" || e.is_tool_result() || e.is_compact_summary == Some(true) {
+        return false;
+    }
+    let text = user_text(e);
+    is_human(e, &classify(e, &text))
+}
+
 /// Title form of a prompt: `"name args"` for a command, else the text; whitespace collapsed,
 /// truncated to [`TITLE_CHARS`] characters.
 pub fn title_text(origin: &PromptOrigin, text: &str) -> String {
