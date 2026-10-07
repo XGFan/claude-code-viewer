@@ -98,6 +98,8 @@ fn reports_corrupt_line_and_unknown_names_with_versions() {
 
     // basic line 66 is truncated mid-write.
     assert_eq!(d.failed_lines, 1);
+    // basic repeats one uuid inside its own file (README); the other scenarios have none.
+    assert_eq!(d.duplicate_uuids, 1);
     assert_eq!(d.files_with_failures.len(), 1);
     let f = &d.files_with_failures[0];
     assert_eq!(Path::new(&f.path), basic);

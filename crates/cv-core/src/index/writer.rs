@@ -535,6 +535,8 @@ pub struct SessionRow {
     pub fork_origin_id: Option<String>,
     pub fork_point_uuid: Option<String>,
     pub is_empty: bool,
+    /// Duplicate uuids within a single file (first occurrence wins), from assembly.
+    pub dup_uuids: u32,
 }
 
 pub fn write_session(conn: &Connection, s: &SessionRow) -> CoreResult<()> {
@@ -543,9 +545,9 @@ pub fn write_session(conn: &Connection, s: &SessionRow) -> CoreResult<()> {
             last_active_ms, duration_ms, message_count, tool_call_count, subagent_count,
             in_tok, out_tok, cr_tok, cc_tok, main_in_tok, main_out_tok, main_cr_tok, main_cc_tok,
             git_branch, primary_model, models_json, versions_json, leaf_uuid, root_uuid,
-            fork_origin_id, fork_point_uuid, is_empty)
+            fork_origin_id, fork_point_uuid, is_empty, dup_uuids)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19,
-            ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29)",
+            ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30)",
     )?
     .execute(params![
         s.id,
@@ -577,6 +579,7 @@ pub fn write_session(conn: &Connection, s: &SessionRow) -> CoreResult<()> {
         s.fork_origin_id,
         s.fork_point_uuid,
         s.is_empty,
+        s.dup_uuids,
     ])?;
     Ok(())
 }

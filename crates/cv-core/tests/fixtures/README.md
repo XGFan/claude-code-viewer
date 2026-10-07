@@ -169,7 +169,7 @@ Only `agent-*.jsonl` count as agent transcripts; `journal.jsonl` and `*.meta.jso
 | busy | `-Users-dev-code-orbit-web/b5805323….jsonl` | 3 | 0 | 2 | 0 | 1 | 1 | 0 | 0 | 5 / 120 / 20000 / 1000 |
 | shell | `-Users-dev-code-orbit-web/45470335….jsonl` | 2 | 0 | 2 | 0 | 1 | 1 | 0 | 0 | 5 / 120 / 20000 / 1000 |
 
-`fixture_root("live")` renders the templates (placeholders `{{PID}}`, `{{PROC_START}}`, `{{PPID}}`, `{{PPID_START}}`, `{{DEAD_PID}}`, also in file names; `procStart` is `ps -o lstart=` output, e.g. `Wed Oct  7 09:34:56 2026`, local time) so:
+`fixture_root("live")` renders the templates (placeholders `{{PID}}`, `{{PROC_START}}`, `{{PPID}}`, `{{PPID_START}}`, `{{DEAD_PID}}`, also in file names; `procStart` is `ps -o lstart=` output, e.g. `Wed Oct  7 09:34:56 2026`, local time; real Claude Code writes it in UTC, and the parser accepts either) so:
 
 | file | session | status | process |
 |---|---|---|---|

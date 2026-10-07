@@ -1,7 +1,7 @@
 //! DDL and schema version (plan §4).
 
 /// `PRAGMA user_version`; any mismatch deletes and recreates the index.
-pub const SCHEMA_VERSION: u32 = 2;
+pub const SCHEMA_VERSION: u32 = 3;
 
 /// `files.role`.
 pub const ROLE_MAIN: i64 = 0;
@@ -42,7 +42,8 @@ CREATE TABLE sessions (
   in_tok INTEGER NOT NULL, out_tok INTEGER NOT NULL, cr_tok INTEGER NOT NULL, cc_tok INTEGER NOT NULL,
   main_in_tok INTEGER NOT NULL, main_out_tok INTEGER NOT NULL, main_cr_tok INTEGER NOT NULL, main_cc_tok INTEGER NOT NULL,
   git_branch TEXT, primary_model TEXT, models_json TEXT NOT NULL DEFAULT '[]', versions_json TEXT NOT NULL DEFAULT '[]',
-  leaf_uuid TEXT, root_uuid TEXT, fork_origin_id TEXT, fork_point_uuid TEXT, is_empty INTEGER NOT NULL DEFAULT 0);
+  leaf_uuid TEXT, root_uuid TEXT, fork_origin_id TEXT, fork_point_uuid TEXT, is_empty INTEGER NOT NULL DEFAULT 0,
+  dup_uuids INTEGER NOT NULL DEFAULT 0);
 CREATE INDEX sessions_project_active ON sessions(project_id, last_active_ms DESC);
 CREATE INDEX sessions_root ON sessions(root_uuid);
 CREATE TABLE messages (

@@ -1551,6 +1551,7 @@ fn write_work(conn: &Connection, w: &SessionWork, cs: &mut ChangeSet) -> CoreRes
         fork_origin_id: a.fork_origin_id.clone(),
         fork_point_uuid: a.fork_point_uuid.clone(),
         is_empty: a.is_empty,
+        dup_uuids: a.duplicate_uuids,
     };
     writer::write_session(conn, &row)?;
     if writer::write_project(conn, &s.project)? || before != Some(a.is_empty) {

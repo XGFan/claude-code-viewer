@@ -6,7 +6,7 @@
 //! - `orphan_subagents`: non-workflow Subagent Runs whose `meta.toolUseId` matches no main-file
 //!   tool call and whose parent agent is unknown. Runs without a `toolUseId` (linked by
 //!   `toolUseResult.agentId` / name at assembly time) are not counted.
-//! - `duplicate_uuids` stays 0: the per-session count from assembly is not stored in the index.
+//! - `duplicate_uuids`: sum of the per-session in-file duplicate counts recorded by assembly.
 
 use std::cmp::Ordering;
 use std::collections::{BTreeSet, HashMap};
@@ -113,6 +113,8 @@ pub fn compute(conn: &Connection) -> CoreResult<Diagnostics> {
     d.versions = versions.into_values().collect();
     d.versions
         .sort_by(|a, b| cmp_version(&b.version, &a.version));
+
+    d.duplicate_uuids = conn.query_row("SELECT coalesce(sum(dup_uuids), 0) FROM sessions", [], |r| r.get(0))?;
 
     d.orphan_subagents = conn.query_row(
         "SELECT count(*) FROM subagents a
