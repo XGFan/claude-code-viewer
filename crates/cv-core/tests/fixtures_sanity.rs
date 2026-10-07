@@ -572,16 +572,16 @@ fn nothing_sensitive_in_fixtures() {
         }
         let text = fs::read_to_string(&p).unwrap_or_default().to_lowercase();
         let user = std::env::var("USER").unwrap_or_default().to_lowercase();
-        let mut bad = vec![
-            "@gmail",
-            "@live",
-            "api_key",
-            "apikey",
-            "password",
-        ];
+        let mut bad = vec!["@gmail", "@live", "api_key", "apikey", "password"];
         if user.len() > 2 {
             bad.push(&user);
         }
+        // Extra private terms (e.g. employer or client names) are kept out of the repo:
+        // CV_FIXTURE_DENYLIST="name1,name2" cargo test -p cv-core --test fixtures_sanity
+        let extra = std::env::var("CV_FIXTURE_DENYLIST")
+            .unwrap_or_default()
+            .to_lowercase();
+        bad.extend(extra.split(',').map(str::trim).filter(|t| t.len() > 2));
         for b in bad {
             assert!(!text.contains(b), "{} contains {b}", rel(&p));
         }
