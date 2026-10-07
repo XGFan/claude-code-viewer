@@ -1,0 +1,33 @@
+[package]
+name = "claude-viewer"
+description = "Claude Viewer: a read-only desktop viewer for Claude Code history."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[lib]
+name = "claude_viewer_lib"
+crate-type = ["rlib"]
+
+[build-dependencies]
+tauri-build.workspace = true
+
+[dependencies]
+cv-core.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+specta.workspace = true
+tauri.workspace = true
+tauri-specta.workspace = true
+specta-typescript.workspace = true
+tauri-plugin-opener.workspace = true
+tauri-plugin-clipboard-manager.workspace = true
+notify.workspace = true
+notify-debouncer-full.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+parking_lot.workspace = true
+crossbeam-channel.workspace = true
+dirs.workspace = true

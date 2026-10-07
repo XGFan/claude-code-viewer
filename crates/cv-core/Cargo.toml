@@ -1,0 +1,29 @@
+[package]
+name = "cv-core"
+description = "Claude Viewer core: tolerant parsing, assembly, index, search and stats over ~/.claude (read-only)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+specta.workspace = true
+# `specta_typescript::Number` makes f64 fields export as `number` (not `number | null`).
+specta-typescript.workspace = true
+rusqlite.workspace = true
+rayon.workspace = true
+memchr.workspace = true
+aho-corasick.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+chrono.workspace = true
+libc.workspace = true
+parking_lot.workspace = true
+crossbeam-channel.workspace = true
+dirs.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
