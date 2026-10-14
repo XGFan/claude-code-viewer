@@ -126,3 +126,9 @@ test("侧栏「全部 Session」紧贴红绿灯下方", async ({ page }) => {
   // Traffic lights end at ~22pt; the overlay title bar needs no more than that plus a margin.
   expect((await page.getByTestId("project-all").boundingBox())!.y - pane.y).toBeLessThanOrEqual(40);
 });
+
+test("触摸板下拉不会把整个页面拉出空白", async ({ page }) => {
+  await page.goto("/");
+  // Rubber-banding itself is a trackpad gesture Playwright cannot drive; the root opt-out is what prevents it.
+  expect(await page.evaluate(() => getComputedStyle(document.documentElement).overscrollBehaviorY)).toBe("none");
+});

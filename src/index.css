@@ -55,6 +55,8 @@
 
 html {
   font-size: 13px;
+  /* The window is the app: a trackpad pull must not rubber-band the whole page and expose blank space. */
+  overscroll-behavior: none;
 }
 
 body {
