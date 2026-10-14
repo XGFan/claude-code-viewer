@@ -88,6 +88,12 @@ pnpm tauri build --bundles app --target aarch64-apple-darwin
 
 产物在 `target/aarch64-apple-darwin/release/bundle/macos/Claude Viewer.app`，使用 ad-hoc 签名、未公证；首次打开如被 Gatekeeper 拦截，右键选择「打开」。
 
+安装到「应用程序」（先退出正在运行的旧版本）：
+
+```sh
+ditto "target/aarch64-apple-darwin/release/bundle/macos/Claude Viewer.app" "/Applications/Claude Viewer.app"
+```
+
 在 macOS 27 上，`tauri build` 设置的 `MACOSX_DEPLOYMENT_TARGET=14.0` 会让 cargo strip 后的 proc-macro 动态库无法加载（`mis-aligned LINKEDIT string pool`），因此 `Cargo.toml` 中对 `profile.release.build-override` 关闭了 strip，不影响最终应用。
 
 ## 结构
