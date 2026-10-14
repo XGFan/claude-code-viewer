@@ -1,0 +1,66 @@
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+Claude Viewer：只读的 macOS 桌面应用（Tauri 2 + React 19），用来搜索和阅读 `~/.claude` 下 Claude Code 的历史 Session。
+
+- 术语以 [CONTEXT.md](CONTEXT.md) 为准（Session / Project / Live Session / Subagent Run / Workflow Run / Branch / Main Line / Fork / Teammate Message），代码、注释、文案都用这些词，避开其中列出的 _Avoid_ 词。
+- 行为规格见 [docs/spec.md](docs/spec.md)（计数口径、用户输入判定、Main Line 规则等都在这里），关键取舍见 [docs/adr/](docs/adr/)。改动对外行为时同步更新 spec / README / CONTEXT。
+
+## 常用命令
+
+```sh
+pnpm install
+pnpm tauri dev                 # 启动真实应用（读取真实数据目录）
+pnpm dev:mock                  # 只起前端 + 内置 mock 数据，http://localhost:1420
+
+cargo test --workspace
+cargo test -p cv-core --test parse                 # 单个集成测试文件（tests/*.rs）
+cargo test -p cv-core --test branch <name>         # 单个用例
+cargo clippy --workspace --all-targets -- -D warnings
+
+pnpm typecheck && pnpm test                        # tsc + vitest（src/**/*.test.ts）
+pnpm vitest run src/lib/diff.test.ts               # 单个前端单测
+pnpm exec playwright install webkit                # 首次跑 E2E 前
+pnpm test:e2e                                      # Playwright，WebKit，mock 模式
+pnpm test:e2e e2e/m3-search.spec.ts -g "<title>"   # 单个 E2E
+E2E_PORT=1431 pnpm test:e2e                        # 并行跑多份时各用一个端口（默认 1421）
+
+pnpm bindings                  # 改了 IPC 类型/命令后重新生成 src/ipc/bindings.ts
+pnpm tauri build --bundles app --target aarch64-apple-darwin
+```
+
+真实数据探针（`#[ignore]`，只读，索引写临时目录）：`CV_REAL_ROOT=~/.claude cargo test -p cv-core --release --test assemble -- --ignored --nocapture`、`CV_BENCH_ROOT=~/.claude cargo test -p cv-core --release --test search -- --ignored --nocapture`。
+
+## 架构
+
+三层，数据单向流动：`crates/cv-core`（纯 Rust，无 tauri 依赖）→ `src-tauri`（外壳）→ `src`（React）。
+
+### cv-core
+
+- `engine.rs` 的 `Engine` 是 src-tauri 调用的**唯一入口**，全部是阻塞调用。它负责：索引同步（stat 遍历 → 与 `files` 表比对 → rayon 并行轻解析 → 按批事务写入 → 重算受影响的 Session；追加只读 `[parsed_offset, EOF)`，文件变小/被替换则整 Session 重解析）；以及显示用的小 LRU（按 source/sidecar 的 path+size+mtime 哈希校验）。
+- 管线：`scan`（遍历数据根、按 realpath/inode 去重）→ `raw`（宽容的 serde 结构，字段全可选）→ `parse`（按行解析，坏行跳过并计数）→ `assemble/*`（把事件日志组装成节点：parentUuid 树、Branch/Main Line、compact 接续、Fork、Subagent/Workflow 关联、工具摘要、⌘F 查找、搜索跳转）→ `index/*`（SQLite + FTS5 trigram）→ `search` / `stats` / `diag`。`known.rs` 列出已知的条目类型/内容块/工具名，未知的进诊断而不是丢弃。
+- `model/*` 是 IPC 类型的**唯一来源**（specta 导出）。改这里或 `src-tauri/src/commands.rs` 的签名后必须 `pnpm bindings`；`src/ipc/bindings.ts` 是生成文件，勿手改。
+- 索引是可丢弃的镜像（ADR-0003）：不写迁移，schema 变化就把 `index/schema.rs` 的 `SCHEMA_VERSION` +1，启动时自动删库重建。
+- 工具输出不进 FTS（ADR-0004），"包含工具输出"搜索是对源文件的并行流式扫描（`search/tool_output.rs`），可取消。
+
+### src-tauri
+
+- `commands.rs`：每个命令都是 async，通过 `with_engine` 把 Engine 调用丢到 blocking pool，错误转成 `AppError`（`message` 是面向用户的中文文案）。新增命令要同时登记到 `lib.rs` 的 `specta_builder()`。
+- `worker.rs`：单个后台 worker 通过 channel 消费 `Job`（FullScan / Fs 批次 / TextBacklog / Rebuild / SetRoot / PollLive / Rescan）。全文索引积压 `TextBacklog` 在空闲时运行，任何其他任务入队都会让它在当前事务提交后让位——改调度逻辑时注意别造成互相重新入队的活锁（曾出现过）。
+- `watcher.rs`（FSEvents，debounce 后发 `Fs` 任务）、`state.rs`（持有可整体替换的 Engine，切换数据根时 swap）、`settings.rs`（数据根覆盖，存于 Application Support）、`events.rs`（IndexStatus / SessionsChanged / LiveChanged 三个事件）。
+
+### src（前端）
+
+- `src/ipc/`：`Api` 接口（`api.ts`）有两套实现——`real.ts` 包装生成的 bindings，`mock.ts` 用 `src/mocks/data/*` 的内存数据。`VITE_IPC=mock`（`.env.mock`，即 `pnpm dev:mock`）切到 mock。**E2E 全部跑在 mock 上**（tauri-driver 不支持 macOS），所以新增/修改 IPC 能力时要同步 `mock.ts` 和 mock 数据。
+- `src/queries/`：TanStack Query hooks 与 `queryKeys`；`events.ts` 订阅后端事件并做节流失效（实时追随、统计刷新）。
+- `src/state/ui.ts`：zustand 的 UI 状态；按 Session 的状态（scope、branchChoices、panelStack、⌘F、展开状态等）在切换 Session 时重置。
+- `src/features/*`：各功能模块；对话渲染在 `features/transcript/`（TanStack Virtual 虚拟列表，`nodes/` 节点渲染，`tools/` 工具渲染器）。Shiki 在 Worker 中运行。`@/` 指向 `src/`。
+
+## 约束
+
+- **对数据根严格只读**（ADR-0002）：源文件只能用 `File::open` 读，绝不写入、移动、删除 `~/.claude` 下任何东西。应用自己的状态只放在 `~/Library/Caches/dev.joy.claude-viewer/`（索引）和 `~/Library/Application Support/dev.joy.claude-viewer/`（设置）。
+- **测试 fixture**：`crates/cv-core/tests/fixtures/<场景>/` 是迷你数据根，由 `examples/sanitize.rs` 从真实 Session 脱敏生成；测试通过 `common::fixture_root(name)` 复制到临时目录使用，不要直接写 fixture 目录。`tests/fixtures_sanity.rs` 钉死了 fixture README 表格里的每个数字，并做敏感信息检查（`CV_FIXTURE_DENYLIST` 追加私有词）——改动或新增 fixture 时同步更新 README 表格和该测试，绝不提交未脱敏的真实数据。
+- 启动、后台调度、设置这类流程单测覆盖不到，需要 `pnpm tauri dev` 实测。
+- 在 macOS 27 上 release 构建依赖根 `Cargo.toml` 中 `profile.release.build-override` 的 `strip = "none"`，不要删。
+- Commit message 风格：`feat|fix|docs|test|style: <中文描述>`，常用「——」补充说明原因或做法。
