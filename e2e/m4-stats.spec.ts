@@ -69,3 +69,18 @@ test("统计页铺满对话区，上下没有空白", async ({ page }) => {
   expect(stats.y).toBe(pane.y); // no blank strip above the stats header
   expect(stats.y + stats.height).toBeGreaterThanOrEqual(pane.y + pane.height - 1); // no blank area below
 });
+
+test("窗口变高时图表不随之拉高", async ({ page }) => {
+  const heights = async () => [
+    (await page.getByTestId("daily-chart").boundingBox())!.height,
+    (await page.getByTestId("heat-chart").boundingBox())!.height,
+  ];
+  await page.setViewportSize({ width: 1400, height: 900 });
+  await page.goto("/");
+  await page.getByTestId("nav-stats").click();
+  await page.getByTestId("daily-chart").locator("canvas").first().waitFor();
+  const before = await heights();
+  await page.setViewportSize({ width: 1400, height: 1400 });
+  await expect.poll(heights).toEqual(before);
+  expect(before[0]).toBeLessThanOrEqual(260);
+});

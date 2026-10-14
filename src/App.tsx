@@ -25,7 +25,8 @@ export default function App() {
     <div className="grid h-full grid-rows-[1fr_28px]">
       <div className={cn("grid min-h-0", hideList ? "grid-cols-[216px_0px_1fr]" : "grid-cols-[216px_300px_1fr]")}>
         <aside data-testid="pane-projects" className="flex min-h-0 flex-col border-r border-border bg-sidebar">
-          <div data-tauri-drag-region="deep" className="h-[52px] shrink-0 pl-[78px]" />
+          {/* Just clears the traffic lights (9–22pt); the list starts right below them. */}
+          <div data-tauri-drag-region="deep" className="h-9 shrink-0" />
           <ProjectList />
           <StatsEntry />
         </aside>

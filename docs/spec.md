@@ -69,7 +69,7 @@
 
 ## 统计面板
 
-时间范围和 Project 过滤；概览卡片（Session 数、消息数、输出 token、活跃天数）；每日 token 柱状图（按模型堆叠，默认只看 output）；热力图（按日 / 星期 × 小时）；Project 排行；工具调用次数和失败率；按 agentType 的 Subagent 统计。页面铺满窗口高度。
+时间范围和 Project 过滤；概览卡片（Session 数、消息数、输出 token、活跃天数）；每日 token 柱状图（按模型堆叠，默认只看 output）；热力图（按日 / 星期 × 小时）；Project 排行；工具调用次数和失败率；按 agentType 的 Subagent 统计。页面背景铺满窗口高度，图表保持固定高度，不随窗口拉高。
 
 - 口径：消息数和热力图只计主对话；token（概览、每日、Project 排行）包含 Subagent；工具调用包含 Subagent 内的调用。日期按本机时区划分。
 - 下钻：点击柱子、热力图格子、工具、agentType、模型图例会筛选 Session 列表，并带上当前的时间范围；点击 Project 排行则切换到该 Project。

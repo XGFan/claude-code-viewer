@@ -233,7 +233,7 @@ export function StatsPanel() {
       {stats && !empty && (
         <>
           <Overview stats={stats} rangeDays={rangeDays} />
-          <div className="grid flex-1 grid-cols-1 gap-3 @3xl:grid-cols-3 @3xl:grid-rows-[1.3fr_1fr]">
+          <div className="grid grid-cols-1 gap-3 @3xl:grid-cols-3">
             <Card
               className="@3xl:col-span-2"
               title="每日 token · 按模型"
@@ -330,7 +330,7 @@ export function StatsPanel() {
 
             <Card title="工具调用" aside={<span className="text-[11px] text-secondary">次数 · 失败率</span>}>
               {tools.length === 0 && <Empty />}
-              <div className="flex max-h-56 flex-col gap-1.5 overflow-auto @3xl:max-h-none @3xl:min-h-0 @3xl:flex-1">
+              <div className="flex max-h-56 flex-col gap-1.5 overflow-auto">
                 {tools.map((t) => {
                   const rate = t.calls ? (t.failures / t.calls) * 100 : 0;
                   const high = rate > 5;

@@ -119,3 +119,10 @@ test("Project 列表滚动时「全部 Session」固定不动", async ({ page })
   expect((await all.boundingBox())!.y).toBe(before);
   await expect(all).toBeInViewport();
 });
+
+test("侧栏「全部 Session」紧贴红绿灯下方", async ({ page }) => {
+  await page.goto("/");
+  const pane = (await page.getByTestId("pane-projects").boundingBox())!;
+  // Traffic lights end at ~22pt; the overlay title bar needs no more than that plus a margin.
+  expect((await page.getByTestId("project-all").boundingBox())!.y - pane.y).toBeLessThanOrEqual(40);
+});
