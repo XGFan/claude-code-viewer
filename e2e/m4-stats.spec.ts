@@ -84,3 +84,18 @@ test("窗口变高时图表不随之拉高", async ({ page }) => {
   await expect.poll(heights).toEqual(before);
   expect(before[0]).toBeLessThanOrEqual(260);
 });
+
+test("滚动统计内容时，标题、时间范围与 Project 筛选固定不动", async ({ page }) => {
+  await page.setViewportSize({ width: 1400, height: 620 });
+  await page.goto("/");
+  await page.getByTestId("nav-stats").click();
+  await page.getByTestId("daily-chart").locator("canvas").first().waitFor();
+  const range = page.getByRole("button", { name: "30 天" });
+  const before = (await range.boundingBox())!.y;
+  const body = page.getByTestId("stats-scroll");
+  await body.evaluate((e) => (e.scrollTop = e.scrollHeight));
+  await expect.poll(() => body.evaluate((e) => e.scrollTop)).toBeGreaterThan(0);
+  expect((await range.boundingBox())!.y).toBe(before);
+  await expect(page.getByRole("heading", { name: "统计" })).toBeInViewport();
+  await expect(range).toBeInViewport();
+});

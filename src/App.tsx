@@ -53,7 +53,7 @@ export default function App() {
             </>
           )}
           {view === "stats" && (
-            <div className="min-h-0 flex-1 overflow-auto bg-list">
+            <div className="min-h-0 flex-1 bg-list">
               <StatsPanel />
             </div>
           )}
