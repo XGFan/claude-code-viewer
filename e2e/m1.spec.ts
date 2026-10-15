@@ -169,3 +169,12 @@ test("滚动条只在滚动时显示", async ({ page }) => {
   await expect.poll(thumb).not.toBe("");
   await expect.poll(thumb, { timeout: 3000 }).toBe("");
 });
+
+test("Session 列表收起时，点选 Project 会自动展开列表", async ({ page }) => {
+  await page.goto("/");
+  await page.getByRole("button", { name: "隐藏 Session 列表" }).click();
+  await expect(page.getByTestId("pane-sessions")).toBeHidden();
+  await page.getByTestId("project-item").filter({ hasText: "orbit-web" }).click();
+  await expect(page.getByTestId("pane-sessions")).toBeVisible();
+  await expect(page.getByTestId("session-row").filter({ hasText: "迁移表单校验到 zod" })).toBeVisible();
+});

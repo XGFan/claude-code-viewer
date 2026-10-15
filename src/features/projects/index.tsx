@@ -50,12 +50,16 @@ export function ProjectList() {
   const view = useUi((s) => s.view);
   const setProjectIds = useUi((s) => s.setProjectIds);
   const setView = useUi((s) => s.setView);
+  const sessionsCollapsed = useUi((s) => s.collapsed.sessions);
+  const toggleCollapsed = useUi((s) => s.toggleCollapsed);
 
   const projects = useMemo(() => [...(data ?? [])].sort((a, b) => b.lastActiveMs - a.lastActiveMs), [data]);
   const total = projects.reduce((n, p) => n + p.sessionCount, 0);
   const pick = (ids: string[]) => {
     setProjectIds(ids);
     setView("sessions");
+    // Picking a project is a request to see its sessions; a collapsed list would leave nothing to click.
+    if (sessionsCollapsed) toggleCollapsed("sessions");
   };
   const inSessions = view === "sessions";
 
