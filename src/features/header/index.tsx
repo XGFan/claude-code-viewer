@@ -1,6 +1,7 @@
 import { Copy, Ellipsis, FolderOpen, Search } from "lucide-react";
 import { Checkbox } from "@/components/ui/checkbox";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
+import { useLeadingInset } from "@/features/layout";
 import { api } from "@/ipc";
 import { cn } from "@/lib/cn";
 import { formatDuration, formatRelative, formatTokens } from "@/lib/format";
@@ -12,6 +13,7 @@ export function SessionHeader() {
   const showHidden = useUi((s) => s.showHidden);
   const setShowHidden = useUi((s) => s.setShowHidden);
   const setSearchOpen = useUi((s) => s.setSearchOpen);
+  const inset = useLeadingInset("main");
   const { data: d } = useSession(sessionId);
   if (!sessionId || !d) return null;
 
@@ -24,7 +26,7 @@ export function SessionHeader() {
     : `已结束 · ${formatRelative(s.lastActiveMs)}`;
 
   return (
-    <header data-testid="header" data-tauri-drag-region="deep" className="flex shrink-0 flex-col gap-1.5 border-b border-border py-2.5 pr-5 pl-6">
+    <header data-testid="header" data-tauri-drag-region="deep" className={cn("flex shrink-0 flex-col gap-1.5 border-b border-border py-2.5 pr-5 pl-6", inset)}>
       <div className="flex flex-wrap items-center gap-2.5">
         <h1 className="m-0 min-w-60 flex-1 truncate text-[15px] font-[650]">{s.title}</h1>
         <button

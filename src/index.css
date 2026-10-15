@@ -71,6 +71,40 @@ body {
   height: 100vh;
 }
 
+/* Overlay-style scrollbars: a thin thumb that shows while scrolling (see lib/scrollbars.ts) or under the pointer. */
+:root {
+  --color-scroll-thumb: rgb(0 0 0 / 0.35);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --color-scroll-thumb: rgb(255 255 255 / 0.35);
+  }
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+  background: transparent;
+}
+
+::-webkit-scrollbar-track,
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  border: 2px solid transparent;
+  border-radius: 999px;
+  background-clip: padding-box;
+  background-color: var(--scroll-thumb, transparent);
+}
+
+::-webkit-scrollbar-thumb:hover,
+::-webkit-scrollbar-thumb:active {
+  background-color: var(--color-scroll-thumb);
+}
+
 ::highlight(cv-find) {
   background-color: #ffd54a;
   color: #1c1c1e;

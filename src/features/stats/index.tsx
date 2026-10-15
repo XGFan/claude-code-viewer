@@ -3,6 +3,7 @@ import { DropdownMenu as Dd } from "radix-ui";
 import { type ReactNode, useMemo, useState } from "react";
 import { DropdownMenuContent, DropdownMenu, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import type { Drill, Stats, TimeRange } from "@/ipc/bindings";
+import { useLeadingInset } from "@/features/layout";
 import { cn } from "@/lib/cn";
 import { formatDuration, formatTokens } from "@/lib/format";
 import { useProjects, useStats } from "@/queries";
@@ -187,6 +188,7 @@ export function StatsPanel() {
   const dark = useDark();
   const theme = themes[dark ? "dark" : "light"];
   const storeProjectIds = useUi((s) => s.projectIds);
+  const inset = useLeadingInset("main");
   const [rangeKey, setRangeKey] = useState<RangeKey>("30");
   const [projectIds, setProjectIds] = useState<string[]>(storeProjectIds);
   const [metric, setMetric] = useState<Metric>("output");
@@ -221,7 +223,10 @@ export function StatsPanel() {
   return (
     <div data-testid="stats" className="@container flex h-full min-w-0 flex-col bg-list">
       {/* Toolbar stays put like the other panes' headers; only the content below scrolls. */}
-      <header data-tauri-drag-region="deep" className="flex min-h-[52px] shrink-0 flex-wrap items-center gap-3 border-b border-border px-6">
+      <header
+        data-tauri-drag-region="deep"
+        className={cn("flex min-h-[52px] shrink-0 flex-wrap items-center gap-3 border-b border-border px-6", inset)}
+      >
         <h1 className="m-0 flex-1 text-[16px] font-semibold">统计</h1>
         <Segmented label="时间范围" value={rangeKey} options={RANGES.map((r) => ({ key: r.key, label: r.label }))} onChange={setRangeKey} />
         <ProjectFilter value={projectIds} onChange={setProjectIds} />

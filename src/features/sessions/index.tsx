@@ -3,6 +3,7 @@ import { ChevronDown, GitBranch, X } from "lucide-react";
 import { useMemo, useRef, type KeyboardEvent } from "react";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import type { Drill, ProjectSummary, SessionSort, SessionSummary } from "@/ipc/bindings";
+import { useLeadingInset } from "@/features/layout";
 import { cn } from "@/lib/cn";
 import { formatRelative, formatTokens } from "@/lib/format";
 import { useProjects, useSessionList } from "@/queries";
@@ -27,6 +28,7 @@ export function SessionList() {
   const sort = useUi((s) => s.sessionSort);
   const descending = useUi((s) => s.sessionDescending);
   const setSort = useUi((s) => s.setSessionSort);
+  const inset = useLeadingInset("sessions");
   const drill = useUi((s) => s.statsDrill);
   const setDrill = useUi((s) => s.setStatsDrill);
 
@@ -61,10 +63,10 @@ export function SessionList() {
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <div data-tauri-drag-region="deep" className="flex h-[52px] shrink-0 items-center gap-2 border-b border-border px-3.5">
+      <div data-tauri-drag-region="deep" className={cn("flex h-[52px] shrink-0 items-center gap-2 border-b border-border px-3.5", inset)}>
         <div className="min-w-0 flex-1">
           <div className="truncate text-[14px] font-semibold">{title}</div>
-          <div className="text-[11px] text-secondary">
+          <div className="truncate text-[11px] text-secondary">
             {liveCount} 个进行中 · 按{sortInfo.order}
             {descending ? "倒序" : "正序"}
           </div>

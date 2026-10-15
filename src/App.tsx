@@ -2,6 +2,7 @@ import { useUi } from "@/state/ui";
 import { DiagnosticsPage } from "@/features/diagnostics";
 import { ProjectList, StatsEntry } from "@/features/projects";
 import { FindBar } from "@/features/find";
+import { PaneToggles, useSessionsHidden } from "@/features/layout";
 import { Outline } from "@/features/outline";
 import { SearchOverlay } from "@/features/search";
 import { SessionHeader } from "@/features/header";
@@ -16,15 +17,22 @@ import { cn } from "@/lib/cn";
 export default function App() {
   const view = useUi((s) => s.view);
   const sessionId = useUi((s) => s.sessionId);
-  // The Subagent panel takes the session list's width so the conversation keeps a readable column.
-  const panelOpen = useUi((s) => s.view === "sessions" && s.sessionId != null && s.panelStack.length > 0);
-  // Stats and diagnostics span the session list's column too (design board 4).
-  const hideList = panelOpen || view !== "sessions";
+  const hideProjects = useUi((s) => s.collapsed.projects);
+  // Besides the user's toggle, the Subagent panel takes the session list's width so the conversation keeps
+  // a readable column, and stats and diagnostics span that column too (design board 4).
+  const hideList = useSessionsHidden().hidden;
 
   return (
     <div className="grid h-full grid-rows-[1fr_28px]">
-      <div className={cn("grid min-h-0", hideList ? "grid-cols-[216px_0px_1fr]" : "grid-cols-[216px_300px_1fr]")}>
-        <aside data-testid="pane-projects" className="flex min-h-0 flex-col border-r border-border bg-sidebar">
+      <div
+        className="grid min-h-0"
+        style={{ gridTemplateColumns: `${hideProjects ? 0 : 216}px ${hideList ? 0 : 300}px 1fr` }}
+      >
+        <aside
+          data-testid="pane-projects"
+          aria-hidden={hideProjects || undefined}
+          className={cn("flex min-h-0 flex-col border-r border-border bg-sidebar", hideProjects && "invisible overflow-hidden border-r-0")}
+        >
           {/* Just clears the traffic lights (9–22pt); the list starts right below them. */}
           <div data-tauri-drag-region="deep" className="h-9 shrink-0" />
           <ProjectList />
@@ -68,6 +76,7 @@ export default function App() {
         </main>
       </div>
       <StatusBar />
+      <PaneToggles />
       {/* Overlays: portal/fixed based; wrapped so placeholder stubs stay out of the layout. */}
       <div className="fixed right-0 bottom-0 size-0 overflow-hidden">
         <SearchOverlay />

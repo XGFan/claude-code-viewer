@@ -132,3 +132,40 @@ test("触摸板下拉不会把整个页面拉出空白", async ({ page }) => {
   // Rubber-banding itself is a trackpad gesture Playwright cannot drive; the root opt-out is what prevents it.
   expect(await page.evaluate(() => getComputedStyle(document.documentElement).overscrollBehaviorY)).toBe("none");
 });
+
+test("Project 栏和 Session 列表可收起，刷新后仍保持", async ({ page }) => {
+  await openRich(page);
+  const header = page.getByTestId("header");
+  const before = (await header.boundingBox())!;
+
+  await page.getByRole("button", { name: "隐藏 Project 栏" }).click();
+  await expect(page.getByTestId("pane-projects")).toBeHidden();
+  await page.keyboard.press("Control+Meta+L");
+  await expect(page.getByTestId("pane-sessions")).toBeHidden();
+  const after = (await header.boundingBox())!;
+  expect(after.width).toBeGreaterThan(before.width + 500);
+  // The header now sits under the toggles, so its content starts past them.
+  const toggles = (await page.getByTestId("pane-toggles").boundingBox())!;
+  expect((await header.getByRole("heading").boundingBox())!.x).toBeGreaterThan(toggles.x + toggles.width);
+
+  await page.reload();
+  await expect(page.getByTestId("pane-projects")).toBeHidden();
+  await expect(page.getByTestId("pane-sessions")).toBeHidden();
+  await page.keyboard.press("Control+Meta+S");
+  await page.getByRole("button", { name: "显示 Session 列表" }).click();
+  await expect(page.getByTestId("pane-projects")).toBeVisible();
+  await expect(page.getByTestId("pane-sessions")).toBeVisible();
+});
+
+test("滚动条只在滚动时显示", async ({ page }) => {
+  await page.setViewportSize({ width: 1400, height: 240 });
+  await page.goto("/");
+  const list = page.getByTestId("project-scroll");
+  await expect(page.getByTestId("project-item").filter({ hasText: "orbit-web" })).toBeVisible();
+  const thumb = () => list.evaluate((e) => e.style.getPropertyValue("--scroll-thumb"));
+  expect(await thumb()).toBe("");
+  await list.evaluate((e) => (e.scrollTop = 40));
+  await expect.poll(() => list.evaluate((e) => e.scrollTop)).toBeGreaterThan(0);
+  await expect.poll(thumb).not.toBe("");
+  await expect.poll(thumb, { timeout: 3000 }).toBe("");
+});

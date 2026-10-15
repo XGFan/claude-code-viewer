@@ -3,6 +3,19 @@ import type { BranchChoice, Drill, JumpTarget, SessionSort, TimeRange, Transcrip
 
 export type View = "sessions" | "stats" | "diagnostics";
 
+export type CollapsiblePane = "projects" | "sessions";
+
+const COLLAPSED_KEY = "cv.collapsedPanes";
+
+function loadCollapsed(): Record<CollapsiblePane, boolean> {
+  const fallback = { projects: false, sessions: false };
+  try {
+    return { ...fallback, ...JSON.parse(localStorage.getItem(COLLAPSED_KEY) ?? "{}") };
+  } catch {
+    return fallback;
+  }
+}
+
 export interface Highlight {
   nodeId: string;
   toolUseId?: string;
@@ -45,6 +58,8 @@ interface UiState {
   /** Time range of the stats view a drill came from; applied to the session list only while the drill is active. */
   statsDrillRange: TimeRange | null;
   settingsOpen: boolean;
+  /** User-collapsed columns; remembered across launches. */
+  collapsed: Record<CollapsiblePane, boolean>;
 
   setView: (view: View) => void;
   setProjectIds: (ids: string[]) => void;
@@ -68,6 +83,7 @@ interface UiState {
   setSessionSort: (sort: SessionSort, descending?: boolean) => void;
   setStatsDrill: (drill: Drill | null, range?: TimeRange | null) => void;
   setSettingsOpen: (open: boolean) => void;
+  toggleCollapsed: (pane: CollapsiblePane) => void;
 }
 
 export const useUi = create<UiState>()((set) => ({
@@ -82,6 +98,7 @@ export const useUi = create<UiState>()((set) => ({
   statsDrill: null,
   statsDrillRange: null,
   settingsOpen: false,
+  collapsed: loadCollapsed(),
 
   setView: (view) => set({ view }),
   setProjectIds: (projectIds) => set({ projectIds }),
@@ -110,4 +127,14 @@ export const useUi = create<UiState>()((set) => ({
     set((s) => ({ sessionSort, sessionDescending: descending ?? s.sessionDescending })),
   setStatsDrill: (statsDrill, range = null) => set({ statsDrill, statsDrillRange: statsDrill ? range : null }),
   setSettingsOpen: (settingsOpen) => set({ settingsOpen }),
+  toggleCollapsed: (pane) =>
+    set((s) => {
+      const collapsed = { ...s.collapsed, [pane]: !s.collapsed[pane] };
+      try {
+        localStorage.setItem(COLLAPSED_KEY, JSON.stringify(collapsed));
+      } catch {
+        // Not remembered; the toggle still applies to this window.
+      }
+      return { collapsed };
+    }),
 }));
