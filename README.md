@@ -3,7 +3,7 @@
 只读的 macOS 桌面应用，用来搜索和阅读 Claude Code 留在本机 `~/.claude` 下的历史 Session。
 
 - **找得到**：⌘K 全局搜索（中英文子串匹配、`"短语"`、`-排除词`，可按 Project / 时间 / 角色 / 进行中过滤），可选扫描工具输出；命中直接跳到对应消息，包括 Subagent 内部和已回退的分支。
-- **读得舒服**：工具调用折叠成摘要，Bash 终端输出、Edit diff、代码高亮按需展开；Subagent 在右侧面板查看完整过程；Branch 切换、Fork 折叠、compact 分隔；⌘F 会话内查找、`j`/`k` 按轮次跳转、轮次大纲。
+- **读得舒服**：工具调用折叠成摘要，Bash 终端输出、Edit diff、代码高亮按需展开；Subagent 在右侧面板查看完整过程；Branch 切换、Fork 折叠、compact 分隔；⌘F 会话内查找、`j`/`k` 按轮次跳转、轮次大纲；Project 栏和 Session 列表可收起，竖屏也有宽敞的对话区。
 - **实时**：监听文件变化，新 Session 自动出现；正在进行的 Session 实时追随。
 - **统计**：按模型的每日 token、活跃热力图、Project 排行、工具调用与失败率、Subagent 使用，图表可下钻到 Session 列表。
 
