@@ -6,7 +6,7 @@
 - **读得舒服**：工具调用折叠成摘要，Bash 终端输出、Edit diff、代码高亮按需展开；Subagent 在右侧面板查看完整过程；Branch 切换、Fork 折叠、compact 分隔；⌘F 会话内查找、`j`/`k` 按轮次跳转、轮次大纲；Project 栏和 Session 列表可收起，竖屏也有宽敞的对话区。
 - **实时**：监听文件变化，新 Session 自动出现；正在进行的 Session 实时追随。
 - **API 金额**：参照 ccusage 的算法按 API 价格估算每个 Session 的花费（含 Subagent，resume / Fork 复制的历史不重复计算），Session 列表可按金额排序，统计页汇总总额与 Project 排行。
-- **统计**：按模型的每日 token、活跃热力图、Project 排行、工具调用与失败率、Subagent 使用，图表可下钻到 Session 列表。
+- **统计**：可按自定义每周重置时间统计本周期用量；按模型的每日 token、活跃热力图、Project 排行、工具调用与失败率、Subagent 使用，图表可下钻到 Session 列表。
 
 ## 快捷键
 

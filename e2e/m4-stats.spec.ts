@@ -101,3 +101,26 @@ test("滚动统计内容时，标题、时间范围与 Project 筛选固定不�
   await expect(page.getByRole("heading", { name: "统计" })).toBeInViewport();
   await expect(range).toBeInViewport();
 });
+
+test("本周期：按设定的每周重置时间统计，设置会被记住", async ({ page }) => {
+  // A Thursday morning; with a Monday 14:00 reset the cycle began three days ago.
+  await page.clock.setFixedTime(new Date("2026-10-15T10:00:00"));
+  await page.goto("/");
+  await page.getByTestId("nav-stats").click();
+  await page.getByRole("button", { name: "本周期" }).click();
+  await page.getByLabel("重置日").selectOption("0");
+  await page.getByLabel("重置时间").fill("14:00");
+  const span = page.getByTestId("cycle-span");
+  await expect(span).toHaveText("本周期 10月12日 周一 14:00 至 10月19日 周一 14:00，还剩 4 天 4 小时");
+  await expect(page.getByTestId("stat-card")).toHaveCount(5);
+
+  await page.getByLabel("重置日").selectOption("3");
+  // Thursday 14:00 is still ahead today, so the cycle began last Thursday.
+  await expect(span).toContainText("本周期 10月8日 周四 14:00");
+
+  await page.reload();
+  await page.getByTestId("nav-stats").click();
+  await page.getByRole("button", { name: "本周期" }).click();
+  await expect(page.getByLabel("重置时间")).toHaveValue("14:00");
+  await expect(span).toContainText("至 10月15日 周四 14:00，还剩 4 小时 0 分");
+});

@@ -1,3 +1,5 @@
+import { format } from "date-fns";
+import { zhCN } from "date-fns/locale";
 import { Check } from "lucide-react";
 import { DropdownMenu as Dd } from "radix-ui";
 import { type ReactNode, useMemo, useState } from "react";
@@ -5,6 +7,7 @@ import { DropdownMenuContent, DropdownMenu, DropdownMenuTrigger } from "@/compon
 import type { Drill, Stats, TimeRange } from "@/ipc/bindings";
 import { useLeadingInset } from "@/features/layout";
 import { cn } from "@/lib/cn";
+import { cycleEnd, cycleStart } from "@/lib/cycle";
 import { formatCost, formatDuration, formatTokens } from "@/lib/format";
 import { useProjects, useStats } from "@/queries";
 import { useUi } from "@/state/ui";
@@ -23,6 +26,7 @@ import {
 } from "./charts";
 
 const RANGES = [
+  { key: "cycle", label: "本周期", days: 7 },
   { key: "7", label: "7 天", days: 7 },
   { key: "30", label: "30 天", days: 30 },
   { key: "90", label: "90 天", days: 90 },
@@ -190,6 +194,48 @@ function Bar({ pct, color, className }: { pct: number; color: string; className?
   );
 }
 
+const WEEKDAY_NAMES = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"];
+const pad = (n: number) => String(n).padStart(2, "0");
+const fmtReset = (d: Date) => format(d, "M月d日 EEE HH:mm", { locale: zhCN });
+
+function remaining(ms: number): string {
+  const h = Math.max(0, Math.floor(ms / 3_600_000));
+  return h >= 24 ? `${Math.floor(h / 24)} 天 ${h % 24} 小时` : `${h} 小时 ${Math.floor((ms % 3_600_000) / 60_000)} 分`;
+}
+
+/** The weekly cycle's reset setting and its current span. */
+function CycleBar({ start, end }: { start: Date; end: Date }) {
+  const reset = useUi((s) => s.weeklyReset);
+  const setReset = useUi((s) => s.setWeeklyReset);
+  const field = "h-6 rounded-md border border-border bg-ground px-1.5 text-[12px] text-text outline-none focus-visible:ring-2 focus-visible:ring-accent";
+  return (
+    <div data-testid="cycle-bar" className="flex basis-full flex-wrap items-center gap-x-2 gap-y-1 pb-2.5 text-[12px] text-secondary">
+      <span>每周</span>
+      <select aria-label="重置日" className={field} value={reset.weekday} onChange={(e) => setReset({ ...reset, weekday: Number(e.target.value) })}>
+        {WEEKDAY_NAMES.map((n, i) => (
+          <option key={n} value={i}>
+            {n}
+          </option>
+        ))}
+      </select>
+      <input
+        type="time"
+        aria-label="重置时间"
+        className={field}
+        value={`${pad(Math.floor(reset.minutes / 60))}:${pad(reset.minutes % 60)}`}
+        onChange={(e) => {
+          const [h, m] = e.target.value.split(":").map(Number);
+          if (Number.isFinite(h) && Number.isFinite(m)) setReset({ ...reset, minutes: h * 60 + m });
+        }}
+      />
+      <span>重置</span>
+      <span data-testid="cycle-span" className="text-text/80">
+        本周期 {fmtReset(start)} 至 {fmtReset(end)}，还剩 {remaining(end.getTime() - Date.now())}
+      </span>
+    </div>
+  );
+}
+
 export function StatsPanel() {
   const dark = useDark();
   const theme = themes[dark ? "dark" : "light"];
@@ -200,8 +246,17 @@ export function StatsPanel() {
   const [metric, setMetric] = useState<Metric>("output");
   const [heat, setHeat] = useState<"day" | "weekHour">("weekHour");
 
+  const weeklyReset = useUi((s) => s.weeklyReset);
   const rangeDays = RANGES.find((r) => r.key === rangeKey)!.days;
-  const timeRange = useMemo<TimeRange | null>(() => (rangeDays ? { fromMs: Date.now() - rangeDays * DAY, toMs: null } : null), [rangeDays]);
+  const cycle = useMemo(() => {
+    if (rangeKey !== "cycle") return null;
+    const start = cycleStart(new Date(), weeklyReset);
+    return { start, end: cycleEnd(start) };
+  }, [rangeKey, weeklyReset]);
+  const timeRange = useMemo<TimeRange | null>(
+    () => (cycle ? { fromMs: cycle.start.getTime(), toMs: null } : rangeDays ? { fromMs: Date.now() - rangeDays * DAY, toMs: null } : null),
+    [cycle, rangeDays],
+  );
   const { data: stats, isPending, isError } = useStats({ timeRange, projectIds });
 
   const drill = (d: Drill | null, ids: string[] = projectIds) => {
@@ -236,6 +291,7 @@ export function StatsPanel() {
         <h1 className="m-0 flex-1 text-[16px] font-semibold">统计</h1>
         <Segmented label="时间范围" value={rangeKey} options={RANGES.map((r) => ({ key: r.key, label: r.label }))} onChange={setRangeKey} />
         <ProjectFilter value={projectIds} onChange={setProjectIds} />
+        {cycle && <CycleBar start={cycle.start} end={cycle.end} />}
       </header>
 
       <div data-testid="stats-scroll" className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto px-6 pt-4 pb-6">

@@ -1,18 +1,28 @@
 import { create } from "zustand";
 import type { BranchChoice, Drill, JumpTarget, SessionSort, TimeRange, TranscriptScope } from "@/ipc/bindings";
+import type { WeeklyReset } from "@/lib/cycle";
 
 export type View = "sessions" | "stats" | "diagnostics";
 
 export type CollapsiblePane = "projects" | "sessions";
 
 const COLLAPSED_KEY = "cv.collapsedPanes";
+const WEEKLY_RESET_KEY = "cv.weeklyReset";
 
-function loadCollapsed(): Record<CollapsiblePane, boolean> {
-  const fallback = { projects: false, sessions: false };
+/** A remembered preference over `fallback`; `fallback` alone when storage is unavailable or garbled. */
+function load<T extends object>(key: string, fallback: T): T {
   try {
-    return { ...fallback, ...JSON.parse(localStorage.getItem(COLLAPSED_KEY) ?? "{}") };
+    return { ...fallback, ...JSON.parse(localStorage.getItem(key) ?? "{}") };
   } catch {
     return fallback;
+  }
+}
+
+function save(key: string, value: unknown) {
+  try {
+    localStorage.setItem(key, JSON.stringify(value));
+  } catch {
+    // Not remembered; the change still applies to this window.
   }
 }
 
@@ -60,6 +70,8 @@ interface UiState {
   settingsOpen: boolean;
   /** User-collapsed columns; remembered across launches. */
   collapsed: Record<CollapsiblePane, boolean>;
+  /** When the stats page's weekly cycle starts over; remembered across launches. */
+  weeklyReset: WeeklyReset;
 
   setView: (view: View) => void;
   setProjectIds: (ids: string[]) => void;
@@ -84,6 +96,7 @@ interface UiState {
   setStatsDrill: (drill: Drill | null, range?: TimeRange | null) => void;
   setSettingsOpen: (open: boolean) => void;
   toggleCollapsed: (pane: CollapsiblePane) => void;
+  setWeeklyReset: (reset: WeeklyReset) => void;
 }
 
 export const useUi = create<UiState>()((set) => ({
@@ -98,7 +111,8 @@ export const useUi = create<UiState>()((set) => ({
   statsDrill: null,
   statsDrillRange: null,
   settingsOpen: false,
-  collapsed: loadCollapsed(),
+  collapsed: load(COLLAPSED_KEY, { projects: false, sessions: false }),
+  weeklyReset: load(WEEKLY_RESET_KEY, { weekday: 0, minutes: 0 }),
 
   setView: (view) => set({ view }),
   setProjectIds: (projectIds) => set({ projectIds }),
@@ -130,11 +144,11 @@ export const useUi = create<UiState>()((set) => ({
   toggleCollapsed: (pane) =>
     set((s) => {
       const collapsed = { ...s.collapsed, [pane]: !s.collapsed[pane] };
-      try {
-        localStorage.setItem(COLLAPSED_KEY, JSON.stringify(collapsed));
-      } catch {
-        // Not remembered; the toggle still applies to this window.
-      }
+      save(COLLAPSED_KEY, collapsed);
       return { collapsed };
     }),
+  setWeeklyReset: (weeklyReset) => {
+    save(WEEKLY_RESET_KEY, weeklyReset);
+    set({ weeklyReset });
+  },
 }));
