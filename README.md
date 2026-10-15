@@ -5,6 +5,7 @@
 - **找得到**：⌘K 全局搜索（中英文子串匹配、`"短语"`、`-排除词`，可按 Project / 时间 / 角色 / 进行中过滤），可选扫描工具输出；命中直接跳到对应消息，包括 Subagent 内部和已回退的分支。
 - **读得舒服**：工具调用折叠成摘要，Bash 终端输出、Edit diff、代码高亮按需展开；Subagent 在右侧面板查看完整过程；Branch 切换、Fork 折叠、compact 分隔；⌘F 会话内查找、`j`/`k` 按轮次跳转、轮次大纲；Project 栏和 Session 列表可收起，竖屏也有宽敞的对话区。
 - **实时**：监听文件变化，新 Session 自动出现；正在进行的 Session 实时追随。
+- **API 金额**：参照 ccusage 的算法按 API 价格估算每个 Session 的花费（含 Subagent，resume / Fork 复制的历史不重复计算），Session 列表可按金额排序，统计页汇总总额与 Project 排行。
 - **统计**：按模型的每日 token、活跃热力图、Project 排行、工具调用与失败率、Subagent 使用，图表可下钻到 Session 列表。
 
 ## 快捷键
@@ -29,7 +30,10 @@
 | 内容 | 位置 |
 |---|---|
 | 索引（可丢弃，随时重建） | `~/Library/Caches/dev.joy.claude-viewer/index.sqlite` |
+| 价格表缓存 | `~/Library/Caches/dev.joy.claude-viewer/pricing.json` |
 | 设置（数据目录覆盖） | `~/Library/Application Support/dev.joy.claude-viewer/settings.json` |
+
+应用唯一的联网请求是在后台下载 LiteLLM 的公开价格表（缓存超过一天才重新下载），用来计算 API 金额；不发送任何本机数据，下载失败时使用内置快照（[ADR-0005](docs/adr/0005-fetch-litellm-prices.md)）。
 
 索引只镜像数据目录当前内容：源文件被删，对应 Session 也随之消失；升级后索引格式变化会自动重建（[ADR-0003](docs/adr/0003-index-is-disposable-mirror.md)）。索引放在 Caches 中，不进入 Time Machine 备份。
 
@@ -77,6 +81,13 @@ pnpm exec playwright install webkit && pnpm test:e2e    # E2E（mock 模式，We
 ```sh
 CV_REAL_ROOT=~/.claude cargo test -p cv-core --release --test assemble -- --ignored --nocapture   # 组装全部 Session
 CV_BENCH_ROOT=~/.claude cargo test -p cv-core --release --test search -- --ignored --nocapture    # 建全文索引并测查询耗时
+```
+
+内置价格快照（`crates/cv-core/src/pricing-snapshot.json`）的刷新方式：
+
+```sh
+curl -sSf https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json \
+  | cargo run -p cv-core --example update_pricing
 ```
 
 `crates/cv-core/tests/fixtures/` 是从真实 Session 精简、脱敏得到的结构样本（见其中的 README），由 `crates/cv-core/examples/sanitize.rs` 生成。

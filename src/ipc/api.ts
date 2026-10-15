@@ -54,6 +54,7 @@ export interface Api {
   onIndexStatus(cb: (payload: IndexStatusEvent) => void): Promise<Unlisten>;
   onSessionsChanged(cb: (payload: SessionsChanged) => void): Promise<Unlisten>;
   onLiveChanged(cb: (payload: LiveChanged) => void): Promise<Unlisten>;
+  onPricesChanged(cb: () => void): Promise<Unlisten>;
 
   copyText(text: string): Promise<void>;
 }

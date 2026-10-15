@@ -11,6 +11,7 @@ pub mod live;
 pub mod model;
 pub mod parse;
 pub mod paths;
+pub mod pricing;
 pub mod raw;
 pub mod scan;
 pub mod search;

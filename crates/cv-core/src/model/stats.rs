@@ -23,6 +23,11 @@ pub struct StatsOverview {
     #[specta(type = Number)]
     pub output_tokens: f64,
     pub active_days: u32,
+    /// API cost in USD, main + subagents.
+    #[specta(type = Number)]
+    pub cost: f64,
+    /// Assistant messages whose model has no price (not in `cost`).
+    pub unpriced_messages: u32,
 }
 
 #[derive(Serialize, Deserialize, Type, Clone, Debug, PartialEq)]
@@ -65,6 +70,8 @@ pub struct ProjectStat {
     pub messages: u32,
     #[specta(type = Number)]
     pub output_tokens: f64,
+    #[specta(type = Number)]
+    pub cost: f64,
 }
 
 #[derive(Serialize, Deserialize, Type, Clone, Debug, PartialEq)]

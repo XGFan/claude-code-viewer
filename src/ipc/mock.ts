@@ -45,11 +45,11 @@ import {
   richSubagents,
   richWorkflows,
 } from "@/mocks/data/rich";
-import { sessionData } from "@/mocks/data/sessions";
+import { richModelCosts, sessionData } from "@/mocks/data/sessions";
 
 const LATENCY_MS = 30;
 
-type EventName = "sessionsChanged" | "liveChanged" | "indexStatus";
+type EventName = "sessionsChanged" | "liveChanged" | "indexStatus" | "pricesChanged";
 
 declare global {
   interface Window {
@@ -117,6 +117,7 @@ const listeners: { [K in EventName]: Set<(p: never) => void> } = {
   sessionsChanged: new Set(),
   liveChanged: new Set(),
   indexStatus: new Set(),
+  pricesChanged: new Set(),
 };
 
 function dispatch(name: EventName, payload: unknown) {
@@ -389,7 +390,15 @@ function listSessions(q: SessionQuery): SessionSummary[] {
     });
   }
   const key = (s: SessionSummary) =>
-    q.sort === "lastActive" ? s.lastActiveMs : q.sort === "created" ? s.createdMs : q.sort === "messages" ? s.messageCount : s.tokens.output;
+    q.sort === "lastActive"
+      ? s.lastActiveMs
+      : q.sort === "created"
+        ? s.createdMs
+        : q.sort === "messages"
+          ? s.messageCount
+          : q.sort === "cost"
+            ? s.cost
+            : s.tokens.output;
   rows.sort((a, b) => (q.descending ? key(b.s) - key(a.s) : key(a.s) - key(b.s)));
   return rows.map(({ s }) => s);
 }
@@ -420,6 +429,13 @@ function sessionDetail(sessionId: string): SessionDetail {
     models: [...new Set([s.primaryModel, ...(isRich ? richSubagents.map((a) => a.model) : [])].filter((m): m is string => !!m))],
     tokensMain: { input: s.tokens.input - sub.input, output: s.tokens.output - sub.output, cacheRead: s.tokens.cacheRead - sub.cacheRead, cacheCreation: s.tokens.cacheCreation - sub.cacheCreation },
     tokensSubagents: sub,
+    modelCosts: isRich
+      ? richModelCosts()
+      : s.primaryModel
+        ? [{ model: s.primaryModel, cost: s.cost, unpricedMessages: s.unpricedMessages }]
+        : s.unpricedMessages
+          ? [{ model: "unknown", cost: 0, unpricedMessages: s.unpricedMessages }]
+          : [],
     versions: ["2.1.91"],
     files: [
       { path: `/Users/dev/.claude/projects/${s.projectId}/${sessionId}.jsonl`, size: 1_482_112, role: "main" },
@@ -450,6 +466,8 @@ function getStats(req: StatsRequest): Stats {
       messages,
       outputTokens: daily.reduce((s, d) => s + d.output, 0),
       activeDays: new Set(daily.map((d) => d.day)).size,
+      cost: projectsStat.reduce((s, p) => s + p.cost, 0),
+      unpricedMessages: 0,
     },
     daily,
     heatDaily: statsSeed.heatDaily.filter((d) => inRange(d.day)),
@@ -594,6 +612,7 @@ export function createMockApi(): Api {
     onIndexStatus: (cb) => subscribe("indexStatus", cb),
     onSessionsChanged: (cb) => subscribe<SessionsChanged>("sessionsChanged", cb),
     onLiveChanged: (cb) => subscribe("liveChanged", cb),
+    onPricesChanged: (cb) => subscribe("pricesChanged", cb),
     copyText: async (text) => {
       calls.push({ method: "copyText", args: [text] });
       try {

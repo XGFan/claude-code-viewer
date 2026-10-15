@@ -27,6 +27,8 @@ pub enum SessionSort {
     Messages,
     /// Sorts by output tokens (main + subagents).
     Tokens,
+    /// Sorts by API cost (main + subagents).
+    Cost,
 }
 
 /// Stats drill-down filter; days and week-hours are bucketed in local time.
@@ -102,6 +104,11 @@ pub struct SessionSummary {
     pub subagent_count: u32,
     /// Main + all subagents.
     pub tokens: TokenTotals,
+    /// API cost in USD, main + all subagents (see `pricing`); unpriced messages count as 0.
+    #[specta(type = Number)]
+    pub cost: f64,
+    /// Assistant messages whose model has no price.
+    pub unpriced_messages: u32,
     pub git_branch: Option<String>,
     pub live: Option<LiveState>,
     pub fork_origin: Option<ForkOrigin>,
@@ -146,10 +153,22 @@ pub struct SessionDetail {
     pub models: Vec<String>,
     pub tokens_main: TokenTotals,
     pub tokens_subagents: TokenTotals,
+    /// Cost per model (main + subagents), most expensive first.
+    pub model_costs: Vec<ModelCost>,
     pub versions: Vec<String>,
     pub files: Vec<SourceFile>,
     pub forks: Vec<ForkChild>,
     pub failed_lines: u32,
     /// `claude --resume <id>`.
     pub resume_command: String,
+}
+
+#[derive(Serialize, Deserialize, Type, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelCost {
+    pub model: String,
+    #[specta(type = Number)]
+    pub cost: f64,
+    /// Messages of this model without a price (all of them, or none).
+    pub unpriced_messages: u32,
 }

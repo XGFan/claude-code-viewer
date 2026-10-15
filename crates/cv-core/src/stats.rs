@@ -8,8 +8,10 @@
 //! - `overview.messages`, `heat_daily`, `heat_week_hour`, `overview.sessions`,
 //!   `overview.active_days` and the project `sessions` / `messages`: main-file messages only
 //!   (human/command prompts + assistant messages by `message.id`, as `message_count`).
-//! - Tokens (`overview.output_tokens`, `daily`, project `output_tokens`): main + subagent
-//!   messages; `daily` skips messages without tokens (prompts, `<synthetic>` errors).
+//! - Tokens (`overview.output_tokens`, `daily`, project `output_tokens`) and cost
+//!   (`overview.cost`, project `cost`, see `pricing`): main + subagent messages, each billed
+//!   once (`messages.billed`, see `writer::rebill`); `daily` skips messages without tokens
+//!   (prompts, `<synthetic>` errors).
 //! - `tools`: main + subagent tool calls (a Subagent's tool use is still the user's tool use);
 //!   failures are tool results with `is_error: true`.
 //! - `subagents`: one run per `subagents` row, grouped by `agent_type`.
@@ -103,14 +105,17 @@ pub fn compute(conn: &Connection, r: &StatsRequest) -> CoreResult<Stats> {
     let mut session_active = vec![false; sessions.len()];
     let mut proj_messages = vec![0u32; projects.len()];
     let mut proj_output = vec![0f64; projects.len()];
+    let mut proj_cost = vec![0f64; projects.len()];
     let mut messages = 0u32;
     let mut output = 0f64;
+    let mut cost = 0f64;
+    let mut unpriced = 0u32;
     let mut heat_daily: BTreeMap<NaiveDate, u32> = BTreeMap::new();
     let mut week_hour = [[0u32; 24]; 7];
     let mut daily: BTreeMap<(NaiveDate, String), [f64; 4]> = BTreeMap::new();
     {
         let mut sql = "SELECT session_id, agent_id = '', ts_ms, role, model, in_tok, out_tok,
-            cr_tok, cc_tok FROM messages"
+            cr_tok, cc_tok, cost, billed FROM messages"
             .to_owned();
         // Unranged: a plain table scan beats walking `messages_ts` back into the table.
         let bounds = if ranged { vec![from, to] } else { vec![] };
@@ -140,11 +145,21 @@ pub fn compute(conn: &Connection, r: &StatsRequest) -> CoreResult<Stats> {
                 row.get::<_, i64>(7)? as f64,
                 row.get::<_, i64>(8)? as f64,
             ];
-            if row.get::<_, i64>(3)? != MSG_ASSISTANT || tok.iter().all(|&v| v == 0.0) {
+            if row.get::<_, i64>(3)? != MSG_ASSISTANT
+                || tok.iter().all(|&v| v == 0.0)
+                || !row.get::<_, bool>(10)?
+            {
                 continue;
             }
             output += tok[1];
             proj_output[pi] += tok[1];
+            match row.get::<_, Option<f64>>(9)? {
+                Some(c) => {
+                    cost += c;
+                    proj_cost[pi] += c;
+                }
+                None => unpriced += 1,
+            }
             let model = row.get::<_, Option<String>>(4)?;
             let e = daily
                 .entry((day, model.unwrap_or_else(|| UNKNOWN.to_owned())))
@@ -169,11 +184,13 @@ pub fn compute(conn: &Connection, r: &StatsRequest) -> CoreResult<Stats> {
             sessions: proj_sessions[i],
             messages: proj_messages[i],
             output_tokens: proj_output[i],
+            cost: proj_cost[i],
         })
         .collect();
     project_stats.sort_by(|a, b| {
-        b.output_tokens
-            .total_cmp(&a.output_tokens)
+        b.cost
+            .total_cmp(&a.cost)
+            .then(b.output_tokens.total_cmp(&a.output_tokens))
             .then(b.sessions.cmp(&a.sessions))
             .then(a.project_id.cmp(&b.project_id))
     });
@@ -184,6 +201,8 @@ pub fn compute(conn: &Connection, r: &StatsRequest) -> CoreResult<Stats> {
             messages,
             output_tokens: output,
             active_days: heat_daily.len() as u32,
+            cost,
+            unpriced_messages: unpriced,
         },
         daily: daily
             .into_iter()

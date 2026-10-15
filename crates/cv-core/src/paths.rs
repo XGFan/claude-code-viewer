@@ -90,6 +90,11 @@ pub fn index_db_path(cache_dir: &Path) -> PathBuf {
     cache_dir.join(INDEX_FILE_NAME)
 }
 
+/// `<cache dir>/pricing.json`: `claude-*` entries of the last price list fetched online.
+pub fn prices_cache_path(cache_dir: &Path) -> PathBuf {
+    cache_dir.join("pricing.json")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

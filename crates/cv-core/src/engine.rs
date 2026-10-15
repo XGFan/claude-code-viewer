@@ -18,9 +18,10 @@ use std::fs::File;
 use std::io::{self, Read, Seek, SeekFrom};
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
-use parking_lot::Mutex;
+use parking_lot::{Mutex, RwLock};
 use rayon::prelude::*;
 use rusqlite::{Connection, OptionalExtension};
 
@@ -42,7 +43,8 @@ use crate::model::{
     ToolOutputSearchEvent, Transcript, TranscriptRequest, TranscriptScope,
 };
 use crate::parse::{ParsedChunk, parse_bytes};
-use crate::paths::{index_db_path, sessions_dir};
+use crate::paths::{index_db_path, prices_cache_path, sessions_dir};
+use crate::pricing::PriceTable;
 use crate::scan::{self, ScanResult, ScannedFile, SessionDirListing, SidecarFile, SidecarKind};
 use crate::{diag, search, stats};
 
@@ -74,6 +76,8 @@ pub struct ChangeSet {
 pub struct Engine {
     cfg: EngineConfig,
     index: Index,
+    /// Also read by the index's `cv_cost` SQL function.
+    prices: Arc<RwLock<PriceTable>>,
     status: Mutex<IndexStatus>,
     /// Serializes syncs and rebuilds (the single writer).
     sync_lock: Mutex<()>,
@@ -98,12 +102,23 @@ impl Engine {
     /// Creates the cache dir and opens (or recreates) the index. Never writes under the data root.
     pub fn open(cfg: EngineConfig) -> CoreResult<Self> {
         std::fs::create_dir_all(&cfg.cache_dir)?;
-        let index = Index::open(&index_db_path(&cfg.cache_dir), &cfg.data_root)?;
+        let prices = Arc::new(RwLock::new(
+            std::fs::read_to_string(prices_cache_path(&cfg.cache_dir))
+                .ok()
+                .and_then(|j| PriceTable::from_litellm(&j))
+                .unwrap_or_else(PriceTable::embedded),
+        ));
+        let index = Index::open(
+            &index_db_path(&cfg.cache_dir),
+            &cfg.data_root,
+            prices.clone(),
+        )?;
         let (sessions_total, text_ready) =
             index.read(|c| Ok((reader::session_count(c)?, reader::text_ready(c)?)))?;
         Ok(Engine {
             cfg,
             index,
+            prices,
             status: Mutex::new(IndexStatus {
                 sessions_total,
                 text_ready,
@@ -217,6 +232,38 @@ impl Engine {
         Ok(changed.then_some(LiveChanged { live: snapshot }))
     }
 
+    /// When the price list was last fetched online (the cache file's mtime).
+    pub fn prices_fetched_at(&self) -> Option<std::time::SystemTime> {
+        std::fs::metadata(prices_cache_path(&self.cfg.cache_dir))
+            .and_then(|m| m.modified())
+            .ok()
+    }
+
+    /// Adopts a price list fetched online (LiteLLM's JSON): caches its `claude-*` entries and,
+    /// when they differ from the current table, re-prices every message. Returns whether costs
+    /// may have changed.
+    pub fn update_prices(&self, litellm_json: &str) -> CoreResult<bool> {
+        let Some(table) = PriceTable::from_litellm(litellm_json) else {
+            return Err(CoreError::Internal("价格表格式无法识别".into()));
+        };
+        std::fs::write(
+            prices_cache_path(&self.cfg.cache_dir),
+            table.to_litellm_json(),
+        )?;
+        if *self.prices.read() == table {
+            return Ok(false);
+        }
+        let _g = self.sync_lock.lock();
+        *self.prices.write() = table;
+        self.index.write(|conn| {
+            let tx = conn.transaction()?;
+            writer::reprice_all(&tx)?;
+            tx.commit()?;
+            Ok(())
+        })?;
+        Ok(true)
+    }
+
     /// Drops and recreates the index, then runs a full scan. Everything is new to the fresh
     /// index, so the change set always reports `projects_changed`.
     pub fn rebuild(&self, p: &dyn Fn(&IndexStatus)) -> CoreResult<ChangeSet> {
@@ -262,14 +309,15 @@ impl Engine {
 
     pub fn get_session(&self, id: &str) -> CoreResult<SessionDetail> {
         let live = self.live_map()?;
-        let (row, files, forks, failed) = self.index.read(|c| {
+        let (row, files, forks, failed, model_costs) = self.index.read(|c| {
             let Some(row) = reader::session_detail(c, id)? else {
                 return Err(CoreError::NotFound("该 Session".into()));
             };
             let files = reader::session_files(c, id)?;
             let forks = reader::fork_children(c, id)?;
             let failed = files.iter().map(|f| f.failed_lines).sum::<u64>();
-            Ok((row, files, forks, failed))
+            let model_costs = reader::model_costs(c, id)?;
+            Ok((row, files, forks, failed, model_costs))
         })?;
         let mut summary = row.summary;
         summary.live = live.get(id).cloned();
@@ -288,6 +336,7 @@ impl Engine {
             models: row.models,
             tokens_main: row.tokens_main,
             tokens_subagents,
+            model_costs,
             versions: row.versions,
             files: files
                 .iter()
@@ -480,6 +529,8 @@ impl Engine {
         );
 
         let mut cs = ChangeSet::default();
+        // Sessions sharing a message with a removed or rewritten one (billing may move to them).
+        let mut neighbors: HashSet<String> = HashSet::new();
         let result = (|| -> CoreResult<()> {
             self.index.write(|conn| {
                 let tx = conn.transaction()?;
@@ -489,6 +540,7 @@ impl Engine {
                         cs.removed.push(sid.clone());
                         cs.projects_changed = true;
                     }
+                    neighbors.extend(writer::copy_neighbors(&tx, sid)?);
                     writer::delete_session(&tx, sid)?;
                 }
                 tx.commit()?;
@@ -519,7 +571,7 @@ impl Engine {
                 self.index.write(|conn| {
                     let tx = conn.transaction()?;
                     for w in &works {
-                        write_work(&tx, w, &mut cs)?;
+                        write_work(&tx, w, &mut cs, &mut neighbors)?;
                     }
                     tx.commit()?;
                     Ok(())
@@ -541,9 +593,12 @@ impl Engine {
                 );
             }
             self.index.write(|conn| {
-                if writer::prune_projects(conn)? > 0 {
+                let tx = conn.transaction()?;
+                rebill_changed(&tx, &mut cs, neighbors)?;
+                if writer::prune_projects(&tx)? > 0 {
                     cs.projects_changed = true;
                 }
+                tx.commit()?;
                 Ok(())
             })?;
             Ok(())
@@ -1493,7 +1548,43 @@ fn session_exists(conn: &Connection, sid: &str) -> CoreResult<Option<bool>> {
         .optional()?)
 }
 
-fn write_work(conn: &Connection, w: &SessionWork, cs: &mut ChangeSet) -> CoreResult<()> {
+/// Above this many changed sessions (a full scan), billing is redone for every session instead of
+/// looking up the neighbors of each.
+const REBILL_ALL_ABOVE: usize = 200;
+
+/// Re-bills the changed sessions and every session sharing a message with them; those whose
+/// totals may have moved are reported as changed too.
+fn rebill_changed(
+    conn: &Connection,
+    cs: &mut ChangeSet,
+    mut neighbors: HashSet<String>,
+) -> CoreResult<()> {
+    if cs.changed.is_empty() && neighbors.is_empty() {
+        return Ok(());
+    }
+    if cs.changed.len() > REBILL_ALL_ABOVE {
+        return writer::rebill(conn, None);
+    }
+    for sid in &cs.changed {
+        neighbors.extend(writer::copy_neighbors(conn, sid)?);
+    }
+    let removed: HashSet<&String> = cs.removed.iter().collect();
+    neighbors.retain(|s| !removed.contains(s));
+    let mut scope: HashSet<String> = cs.changed.iter().cloned().collect();
+    for n in neighbors {
+        if scope.insert(n.clone()) {
+            cs.changed.push(n);
+        }
+    }
+    writer::rebill(conn, Some(&scope))
+}
+
+fn write_work(
+    conn: &Connection,
+    w: &SessionWork,
+    cs: &mut ChangeSet,
+    neighbors: &mut HashSet<String>,
+) -> CoreResult<()> {
     for (id, size, mtime) in &w.stat_only {
         writer::write_file_stat(conn, *id, *size, *mtime)?;
     }
@@ -1502,6 +1593,7 @@ fn write_work(conn: &Connection, w: &SessionWork, cs: &mut ChangeSet) -> CoreRes
     }
     let before = session_exists(conn, &w.sid)?;
     if w.reparse {
+        neighbors.extend(writer::copy_neighbors(conn, &w.sid)?);
         writer::delete_session(conn, &w.sid)?;
     }
     for f in &w.files {
@@ -1543,8 +1635,8 @@ fn write_work(conn: &Connection, w: &SessionWork, cs: &mut ChangeSet) -> CoreRes
         return Ok(());
     };
     writer::write_subagents(conn, &w.sid, &w.agents)?;
-    let agent_tok = writer::agent_token_totals(conn, &w.sid)?;
     let a = &s.agg;
+    // Placeholders: `rebill_changed` re-sums the token columns from billed messages.
     let main_tok = a.tokens.clone();
     let row = SessionRow {
         id: w.sid.clone(),
@@ -1563,12 +1655,7 @@ fn write_work(conn: &Connection, w: &SessionWork, cs: &mut ChangeSet) -> CoreRes
         message_count: a.message_count,
         tool_call_count: a.tool_call_count,
         subagent_count: w.subagent_count,
-        tokens: TokenTotals {
-            input: main_tok.input + agent_tok.input,
-            output: main_tok.output + agent_tok.output,
-            cache_read: main_tok.cache_read + agent_tok.cache_read,
-            cache_creation: main_tok.cache_creation + agent_tok.cache_creation,
-        },
+        tokens: main_tok.clone(),
         main_tokens: main_tok,
         git_branch: a.git_branch.clone(),
         primary_model: a.primary_model.clone(),

@@ -3,10 +3,18 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { useLeadingInset } from "@/features/layout";
 import { api } from "@/ipc";
+import type { ModelCost } from "@/ipc/bindings";
 import { cn } from "@/lib/cn";
-import { formatDuration, formatRelative, formatTokens } from "@/lib/format";
+import { formatCost, formatDuration, formatRelative, formatTokens } from "@/lib/format";
 import { useSession } from "@/queries";
 import { useUi } from "@/state/ui";
+
+/** Hover text of the cost: per model (main + Subagents), then what was left out. */
+function costBreakdown(costs: ModelCost[], unpriced: number): string {
+  const lines = costs.map((m) => `${m.model}  ${m.unpricedMessages > 0 ? "无价格" : formatCost(m.cost)}`);
+  if (unpriced > 0) lines.push(`${unpriced} 条消息的模型无价格，未计入`);
+  return ["按 API 价格估算（含 Subagent）", ...lines].join("\n");
+}
 
 export function SessionHeader() {
   const sessionId = useUi((s) => s.sessionId);
@@ -83,6 +91,10 @@ export function SessionHeader() {
         {s.primaryModel && <span>{s.primaryModel}</span>}
         <span>
           输出 {formatTokens(t.output)} · 输入 {formatTokens(t.input + t.cacheRead + t.cacheCreation)}（缓存 {formatTokens(t.cacheRead)}）
+        </span>
+        <span data-testid="session-cost" title={costBreakdown(d.modelCosts, s.unpricedMessages)}>
+          API {formatCost(s.cost)}
+          {s.unpricedMessages > 0 && "+"}
         </span>
         <span>{formatDuration(d.durationMs)}</span>
         <span>{s.messageCount} 条消息</span>

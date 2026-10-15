@@ -15,6 +15,20 @@ export const tok = (input: number, output: number, cacheRead = 0, cacheCreation 
 export const sumTok = (...t: TokenTotals[]): TokenTotals =>
   t.reduce((a, b) => tok(a.input + b.input, a.output + b.output, a.cacheRead + b.cacheRead, a.cacheCreation + b.cacheCreation), tok(0, 0));
 
+/** USD per MTok: input, output, cache read, cache write (5-minute). */
+const RATES: Record<string, [number, number, number, number]> = {
+  "claude-opus-4-7": [5, 25, 0.5, 6.25],
+  "claude-sonnet-5-5": [2, 10, 0.1, 2.5],
+  "claude-haiku-4-5": [1, 5, 0.1, 1.25],
+};
+
+/** Mock API cost; `null` when the model has no price. */
+export const costOf = (model: string | null, t: TokenTotals): number | null => {
+  const r = model ? RATES[model] : undefined;
+  if (!r) return null;
+  return (t.input * r[0] + t.output * r[1] + t.cacheRead * r[2] + t.cacheCreation * r[3]) / 1e6;
+};
+
 interface NodeOpts {
   hidden?: boolean;
   inherited?: boolean;

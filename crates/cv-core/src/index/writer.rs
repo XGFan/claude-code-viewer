@@ -64,7 +64,12 @@ pub struct MessageRow {
     pub role: i64,
     pub ts_ms: i64,
     pub model: Option<String>,
-    pub tokens: [i64; 4],
+    /// input, output, cache read, cache creation (all), cache creation 1-hour part.
+    pub tokens: [i64; 5],
+    /// `usage.speed == "fast"`.
+    pub fast: bool,
+    /// `costUSD` Claude Code logged on the entry (older versions).
+    pub logged_cost: Option<f64>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -159,6 +164,9 @@ pub fn extract_rows<'a>(records: impl IntoIterator<Item = &'a EntryRecord>) -> F
                     u.output_tokens,
                     u.cache_read_input_tokens,
                     u.cache_creation_input_tokens,
+                    u.cache_creation
+                        .as_ref()
+                        .and_then(|c| c.ephemeral_1h_input_tokens),
                 ]
                 .map(|v| v.unwrap_or(0.0) as i64);
                 let row = MessageRow {
@@ -167,6 +175,8 @@ pub fn extract_rows<'a>(records: impl IntoIterator<Item = &'a EntryRecord>) -> F
                     ts_ms: ts,
                     model: msg.model.clone(),
                     tokens,
+                    fast: u.speed.as_deref() == Some("fast"),
+                    logged_cost: e.cost_usd,
                 };
                 match msg_index.get(&key) {
                     Some(&i) => merge_message(&mut rows.messages[i], &row),
@@ -188,7 +198,9 @@ pub fn extract_rows<'a>(records: impl IntoIterator<Item = &'a EntryRecord>) -> F
                         role: MSG_PROMPT,
                         ts_ms: ts,
                         model: None,
-                        tokens: [0; 4],
+                        tokens: [0; 5],
+                        fast: false,
+                        logged_cost: None,
                     });
                 }
             }
@@ -205,6 +217,102 @@ fn merge_message(into: &mut MessageRow, other: &MessageRow) {
     if into.model.is_none() {
         into.model = other.model.clone();
     }
+    into.fast |= other.fast;
+    into.logged_cost = max_cost(into.logged_cost, other.logged_cost);
+}
+
+fn max_cost(a: Option<f64>, b: Option<f64>) -> Option<f64> {
+    match (a, b) {
+        (Some(a), Some(b)) => Some(a.max(b)),
+        (a, b) => a.or(b),
+    }
+}
+
+/// `cv_cost(model, in, out, cr, cc, cc1h, fast, logged_cost)` over `messages` columns: the
+/// message's USD cost, NULL when its model has no price (see [`crate::pricing`]). Registered on
+/// the writer connection by [`crate::index::Index::open`].
+pub const COST_EXPR: &str =
+    "cv_cost(model, in_tok, out_tok, cr_tok, cc_tok, cc1h_tok, fast, logged_cost)";
+
+/// Sessions other than `session_id` holding a copy of one of its assistant messages (a resumed or
+/// forked session repeats the earlier conversation in its own file).
+pub fn copy_neighbors(conn: &Connection, session_id: &str) -> CoreResult<Vec<String>> {
+    let mut st = conn.prepare_cached(&format!(
+        "SELECT DISTINCT o.session_id FROM messages m
+         JOIN messages o ON o.key = m.key AND o.role = {MSG_ASSISTANT} AND o.session_id != m.session_id
+         WHERE m.session_id = ?1 AND m.role = {MSG_ASSISTANT}"
+    ))?;
+    let rows = st.query_map([session_id], |r| r.get::<_, String>(0))?;
+    Ok(rows.collect::<Result<_, _>>()?)
+}
+
+/// Billing (ccusage's dedupe): every assistant message is billed once, in the copy whose session
+/// started first (then by session id, main before Subagents); `billed` marks that copy. Then the
+/// sessions' token and cost columns are re-summed from their billed messages. `sessions` limits
+/// both steps (it must include every session sharing a message with a changed one); `None` = all.
+pub fn rebill(conn: &Connection, sessions: Option<&HashSet<String>>) -> CoreResult<()> {
+    let scope = match sessions {
+        Some(ids) => {
+            conn.execute_batch(
+                "CREATE TEMP TABLE IF NOT EXISTS temp_rebill(id TEXT PRIMARY KEY); DELETE FROM temp_rebill;",
+            )?;
+            let mut st =
+                conn.prepare_cached("INSERT OR IGNORE INTO temp_rebill(id) VALUES (?1)")?;
+            for id in ids {
+                st.execute([id])?;
+            }
+            Some(())
+        }
+        None => None,
+    };
+    let (msg_scope, session_scope) = match scope {
+        Some(()) => (
+            " AND session_id IN (SELECT id FROM temp_rebill)",
+            " WHERE id IN (SELECT id FROM temp_rebill)",
+        ),
+        None => ("", ""),
+    };
+    conn.execute(
+        &format!(
+            "UPDATE messages SET billed = NOT EXISTS (
+                SELECT 1 FROM messages o JOIN sessions so ON so.id = o.session_id
+                WHERE o.key = messages.key AND o.role = {MSG_ASSISTANT}
+                    AND (coalesce(so.created_ms, so.last_active_ms), o.session_id, o.agent_id) <
+                        ((SELECT coalesce(s.created_ms, s.last_active_ms) FROM sessions s
+                            WHERE s.id = messages.session_id), messages.session_id, messages.agent_id))
+             WHERE role = {MSG_ASSISTANT}{msg_scope}"
+        ),
+        [],
+    )?;
+    conn.execute(
+        &format!(
+            "UPDATE sessions SET (in_tok, out_tok, cr_tok, cc_tok, main_in_tok, main_out_tok, main_cr_tok,
+                main_cc_tok, cost, unpriced) = (
+                SELECT coalesce(sum(in_tok), 0), coalesce(sum(out_tok), 0), coalesce(sum(cr_tok), 0),
+                    coalesce(sum(cc_tok), 0),
+                    coalesce(sum(in_tok) FILTER (WHERE agent_id = ''), 0),
+                    coalesce(sum(out_tok) FILTER (WHERE agent_id = ''), 0),
+                    coalesce(sum(cr_tok) FILTER (WHERE agent_id = ''), 0),
+                    coalesce(sum(cc_tok) FILTER (WHERE agent_id = ''), 0),
+                    coalesce(sum(cost), 0), count(*) FILTER (WHERE cost IS NULL)
+                FROM messages m WHERE m.session_id = sessions.id AND m.role = {MSG_ASSISTANT}
+                    AND m.billed = 1){session_scope}"
+        ),
+        [],
+    )?;
+    if scope.is_some() {
+        conn.execute("DELETE FROM temp_rebill", [])?;
+    }
+    Ok(())
+}
+
+/// Recomputes every message's cost with the current price table, then every session's total.
+pub fn reprice_all(conn: &Connection) -> CoreResult<()> {
+    conn.execute(
+        &format!("UPDATE messages SET cost = {COST_EXPR} WHERE role = 1"),
+        [],
+    )?;
+    rebill(conn, None)
 }
 
 /// Human or command prompt (the assembly classifier, so `messages` agrees with `message_count`).
@@ -354,13 +462,20 @@ pub fn write_rows(
     rows: &FileRows,
 ) -> CoreResult<()> {
     let mut st = conn.prepare_cached(
-        "INSERT INTO messages(session_id, agent_id, key, role, ts_ms, model, in_tok, out_tok, cr_tok, cc_tok)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+        "INSERT INTO messages(session_id, agent_id, key, role, ts_ms, model, in_tok, out_tok, cr_tok, cc_tok,
+            cc1h_tok, fast, logged_cost)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
          ON CONFLICT(session_id, agent_id, key) DO UPDATE SET
             in_tok=max(in_tok, excluded.in_tok), out_tok=max(out_tok, excluded.out_tok),
             cr_tok=max(cr_tok, excluded.cr_tok), cc_tok=max(cc_tok, excluded.cc_tok),
+            cc1h_tok=max(cc1h_tok, excluded.cc1h_tok), fast=max(fast, excluded.fast),
+            logged_cost=max(coalesce(logged_cost, excluded.logged_cost), coalesce(excluded.logged_cost, logged_cost)),
             model=coalesce(model, excluded.model)",
     )?;
+    // Priced after the upsert, on the tokens merged with earlier fragments.
+    let mut price = conn.prepare_cached(&format!(
+        "UPDATE messages SET cost = {COST_EXPR} WHERE session_id = ?1 AND agent_id = ?2 AND key = ?3"
+    ))?;
     for m in &rows.messages {
         st.execute(params![
             session_id,
@@ -373,7 +488,13 @@ pub fn write_rows(
             m.tokens[1],
             m.tokens[2],
             m.tokens[3],
+            m.tokens[4],
+            m.fast,
+            m.logged_cost,
         ])?;
+        if m.role == MSG_ASSISTANT {
+            price.execute(params![session_id, agent_id, m.key])?;
+        }
     }
     let mut st = conn.prepare_cached(
         "INSERT INTO tool_calls(session_id, agent_id, tool_use_id, name, ts_ms)
@@ -488,24 +609,6 @@ pub fn write_subagents(conn: &Connection, session_id: &str, agents: &[AgentRow])
         ])?;
     }
     Ok(())
-}
-
-/// Σ tokens of the session's subagent messages (A8).
-pub fn agent_token_totals(conn: &Connection, session_id: &str) -> CoreResult<TokenTotals> {
-    let t = conn
-        .prepare_cached(
-            "SELECT coalesce(sum(in_tok),0), coalesce(sum(out_tok),0), coalesce(sum(cr_tok),0),
-                coalesce(sum(cc_tok),0) FROM messages WHERE session_id=?1 AND agent_id != ''",
-        )?
-        .query_row([session_id], |r| {
-            Ok(TokenTotals {
-                input: r.get::<_, i64>(0)? as f64,
-                output: r.get::<_, i64>(1)? as f64,
-                cache_read: r.get::<_, i64>(2)? as f64,
-                cache_creation: r.get::<_, i64>(3)? as f64,
-            })
-        })?;
-    Ok(t)
 }
 
 /// A `sessions` row.
@@ -656,6 +759,25 @@ mod tests {
     use crate::parse::parse_bytes;
 
     #[test]
+    fn extracts_cost_inputs_and_merges_fragments() {
+        let lines = [
+            r#"{"type":"assistant","uuid":"a1","timestamp":"2026-01-01T00:00:01Z","message":{"id":"m1","model":"x","content":[],"usage":{"input_tokens":1,"cache_creation_input_tokens":30,"cache_creation":{"ephemeral_5m_input_tokens":10,"ephemeral_1h_input_tokens":20}}}}"#,
+            r#"{"type":"assistant","uuid":"a2","timestamp":"2026-01-01T00:00:02Z","message":{"id":"m1","model":"x","content":[],"usage":{"output_tokens":7,"speed":"fast"}}}"#,
+            r#"{"type":"assistant","uuid":"a3","timestamp":"2026-01-01T00:00:03Z","costUSD":0.25,"message":{"id":"m2","model":"x","content":[],"usage":{"input_tokens":1}}}"#,
+        ];
+        let buf = lines.join("\n") + "\n";
+        let rows = extract_rows(&parse_bytes(buf.as_bytes(), 0).records);
+        let [m1, m2] = &rows.messages[..] else {
+            panic!("{:?}", rows.messages)
+        };
+        assert_eq!(m1.tokens, [1, 7, 0, 30, 20]);
+        assert!(m1.fast);
+        assert_eq!(m1.logged_cost, None);
+        assert!(!m2.fast);
+        assert_eq!(m2.logged_cost, Some(0.25));
+    }
+
+    #[test]
     fn extracts_messages_tools_and_persisted() {
         let lines = [
             r#"{"type":"user","uuid":"u1","timestamp":"2026-01-01T00:00:00Z","message":{"role":"user","content":"hello"}}"#,
@@ -669,7 +791,7 @@ mod tests {
         let chunk = parse_bytes(buf.as_bytes(), 0);
         let rows = extract_rows(&chunk.records);
         assert_eq!(rows.messages.len(), 2);
-        assert_eq!(rows.messages[1].tokens, [3, 5, 0, 0]);
+        assert_eq!(rows.messages[1].tokens, [3, 5, 0, 0, 0]);
         assert_eq!(rows.tool_calls.len(), 2);
         assert_eq!(rows.tool_errors, vec!["t1".to_owned()]);
         assert_eq!(rows.persisted[0].file_name, "abc.txt");

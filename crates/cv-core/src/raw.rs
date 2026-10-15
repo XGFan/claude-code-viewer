@@ -44,6 +44,9 @@ pub struct RawEntry {
     pub is_compact_summary: Option<bool>,
     #[serde(default, deserialize_with = "lenient::boolean")]
     pub is_api_error_message: Option<bool>,
+    /// Cost Claude Code itself logged on assistant entries (older versions only).
+    #[serde(rename = "costUSD", default, deserialize_with = "lenient::number")]
+    pub cost_usd: Option<f64>,
     /// `system` entries.
     #[serde(default, deserialize_with = "lenient::string")]
     pub level: Option<String>,
@@ -223,6 +226,20 @@ pub struct RawUsage {
     pub cache_read_input_tokens: Option<f64>,
     #[serde(default, deserialize_with = "lenient::number")]
     pub cache_creation_input_tokens: Option<f64>,
+    /// 5-minute / 1-hour split of `cache_creation_input_tokens` (priced differently).
+    #[serde(default, deserialize_with = "lenient::object")]
+    pub cache_creation: Option<RawCacheCreation>,
+    /// `standard` or `fast` (fast mode is billed at a model-specific multiple).
+    #[serde(default, deserialize_with = "lenient::string")]
+    pub speed: Option<String>,
+}
+
+#[derive(Deserialize, Debug, Default, Clone, PartialEq)]
+pub struct RawCacheCreation {
+    #[serde(default, deserialize_with = "lenient::number")]
+    pub ephemeral_5m_input_tokens: Option<f64>,
+    #[serde(default, deserialize_with = "lenient::number")]
+    pub ephemeral_1h_input_tokens: Option<f64>,
 }
 
 #[derive(Deserialize, Debug, Default, Clone, PartialEq)]

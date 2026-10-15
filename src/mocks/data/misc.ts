@@ -71,7 +71,7 @@ const daily = Array.from({ length: 30 }, (_, i) => 29 - i).flatMap((back) =>
 );
 
 export const stats = {
-  overview: { sessions: 10, messages: 1286, outputTokens: daily.reduce((s, d) => s + d.output, 0), activeDays: 24 },
+  overview: { sessions: 10, messages: 1286, outputTokens: daily.reduce((s, d) => s + d.output, 0), activeDays: 24, cost: 412.37, unpricedMessages: 0 },
   daily,
   heatDaily: Array.from({ length: 90 }, (_, i) => ({ day: localDay(NOW - (89 - i) * DAY), messages: Math.round(rnd(i + 7) * 80) })),
   heatWeekHour: Array.from({ length: 7 * 24 }, (_, i) => ({
@@ -80,9 +80,9 @@ export const stats = {
     messages: i % 24 >= 9 && i % 24 <= 22 ? Math.round(rnd(i + 11) * 60) : Math.round(rnd(i + 11) * 5),
   })),
   projects: [
-    { projectId: LUMEN, displayName: "lumen-api", sessions: 4, messages: 612, outputTokens: 2_140_000 },
-    { projectId: ORBIT, displayName: "orbit-web", sessions: 4, messages: 488, outputTokens: 1_310_000 },
-    { projectId: HOMELAB, displayName: "homelab-infra", sessions: 2, messages: 186, outputTokens: 520_000 },
+    { projectId: LUMEN, displayName: "lumen-api", sessions: 4, messages: 612, outputTokens: 2_140_000, cost: 236.4 },
+    { projectId: ORBIT, displayName: "orbit-web", sessions: 4, messages: 488, outputTokens: 1_310_000, cost: 141.82 },
+    { projectId: HOMELAB, displayName: "homelab-infra", sessions: 2, messages: 186, outputTokens: 520_000, cost: 34.15 },
   ],
   tools: [
     { name: "Bash", calls: 1240, failures: 118 },

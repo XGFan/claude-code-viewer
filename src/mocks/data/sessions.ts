@@ -1,5 +1,5 @@
 import type { LiveState, Node, SessionSummary, TitleSource, TokenTotals } from "@/ipc/bindings";
-import { asstNode, call, DAY, HOUR, MIN, NOW, sumTok, tok, userNode } from "./builders";
+import { asstNode, call, costOf, DAY, HOUR, MIN, NOW, sumTok, tok, userNode } from "./builders";
 import { HOMELAB, LUMEN, ORBIT } from "./projects";
 import { RICH_ID, richMain, richSubagents } from "./rich";
 
@@ -133,6 +133,17 @@ const defs: Def[] = [
   },
 ];
 
+/** Main + Subagent cost of the rich session (each run at its own model's rate). */
+export function richModelCosts(): { model: string; cost: number; unpricedMessages: number }[] {
+  const byModel = new Map<string, number>([["claude-sonnet-5-5", costOf("claude-sonnet-5-5", tok(61_000, 42_400, 1_450_000, 88_000))!]]);
+  for (const a of richSubagents) byModel.set(a.model, (byModel.get(a.model) ?? 0) + (costOf(a.model, a.tokens) ?? 0));
+  return [...byModel].map(([model, cost]) => ({ model, cost, unpricedMessages: 0 })).sort((a, b) => b.cost - a.cost);
+}
+
+function richCost() {
+  return { cost: richModelCosts().reduce((s, m) => s + m.cost, 0), unpricedMessages: 0 };
+}
+
 function turnNodes(prefix: string, startMs: number, turns: Turn[], inheritedCount = 0): Node[] {
   const nodes: Node[] = [];
   turns.forEach((turn, i) => {
@@ -189,6 +200,7 @@ export const sessionData: MockSessionData[] = defs.map((d) => {
     toolCallCount: d.id === IDS.rich ? 27 : nodes.filter((n) => n.body.kind === "assistant" && n.body.blocks.some((b) => b.kind === "toolCall")).length,
     subagentCount: d.id === IDS.rich ? richSubagents.length : (d.subagentCount ?? 0),
     tokens: d.id === IDS.rich ? richTokens : d.tokens,
+    ...(d.id === IDS.rich ? richCost() : { cost: costOf(d.model, d.tokens) ?? 0, unpricedMessages: costOf(d.model, d.tokens) == null ? 1 : 0 }),
     gitBranch: d.gitBranch,
     live: d.live,
     forkOrigin: d.forkOf ? { sessionId: d.forkOf.id, title: originDef.title, forkPointId: forkOf!.lastInheritedId } : null,

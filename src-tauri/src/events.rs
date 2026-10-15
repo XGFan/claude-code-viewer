@@ -13,6 +13,10 @@ pub struct IndexStatusEvent(pub IndexStatus);
 #[derive(Serialize, Deserialize, Type, Event, Clone, Debug)]
 pub struct SessionsChangedEvent(pub SessionsChanged);
 
+/// A newly fetched price list changed the API cost of indexed messages.
+#[derive(Serialize, Deserialize, Type, Event, Clone, Debug)]
+pub struct PricesChangedEvent;
+
 /// Only when the Live Session set or a status changes.
 #[derive(Serialize, Deserialize, Type, Event, Clone, Debug)]
 pub struct LiveChangedEvent(pub LiveChanged);

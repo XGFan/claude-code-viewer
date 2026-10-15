@@ -8,12 +8,15 @@ pub mod text;
 pub mod writer;
 
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::Duration;
 
-use parking_lot::Mutex;
+use parking_lot::{Mutex, RwLock};
+use rusqlite::functions::FunctionFlags;
 use rusqlite::{Connection, OptionalExtension};
 
 use crate::error::CoreResult;
+use crate::pricing::{PriceTable, Usage};
 use schema::{DDL, DROP_ALL, SCHEMA_VERSION};
 
 const READ_POOL_MAX: usize = 4;
@@ -29,7 +32,12 @@ pub struct Index {
 impl Index {
     /// Opens (or recreates) the index at `path` for `data_root`. A schema-version or data-root
     /// mismatch, or an unreadable file, deletes `index.sqlite*` and starts over (ADR-0003).
-    pub fn open(path: &Path, data_root: &Path) -> CoreResult<Self> {
+    /// `prices` backs the `cv_cost` SQL function on the writer connection.
+    pub fn open(
+        path: &Path,
+        data_root: &Path,
+        prices: Arc<RwLock<PriceTable>>,
+    ) -> CoreResult<Self> {
         let root = data_root.display().to_string();
         let conn = match open_valid(path, &root) {
             Ok(Some(conn)) => conn,
@@ -40,6 +48,7 @@ impl Index {
                 conn
             }
         };
+        register_cost_fn(&conn, prices)?;
         Ok(Index {
             path: path.to_path_buf(),
             writer: Mutex::new(conn),
@@ -83,6 +92,25 @@ impl Index {
             Ok(())
         })
     }
+}
+
+/// See [`writer::COST_EXPR`].
+fn register_cost_fn(conn: &Connection, prices: Arc<RwLock<PriceTable>>) -> CoreResult<()> {
+    conn.create_scalar_function("cv_cost", 8, FunctionFlags::SQLITE_UTF8, move |ctx| {
+        let model: Option<String> = ctx.get(0)?;
+        let tok = |i| ctx.get::<i64>(i).map(|v| v.max(0) as f64);
+        let (cc, cc_1h) = (tok(4)?, tok(5)?);
+        let usage = Usage {
+            input: tok(1)?,
+            output: tok(2)?,
+            cache_read: tok(3)?,
+            cache_write_5m: (cc - cc_1h).max(0.0),
+            cache_write_1h: cc_1h.min(cc),
+            fast: ctx.get::<i64>(6)? != 0,
+        };
+        Ok(prices.read().cost(model.as_deref(), &usage, ctx.get(7)?))
+    })?;
+    Ok(())
 }
 
 fn open_conn(path: &Path) -> CoreResult<Connection> {

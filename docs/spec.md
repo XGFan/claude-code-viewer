@@ -25,7 +25,9 @@
 - **Live Session**：`~/.claude/sessions/<pid>.json` 存在、进程存活且 `procStart` 一致；`status` 区分 busy 和 idle。兜底规则：文件最近几分钟内被修改过。
 - 标题优先级：`custom-title` > `ai-title` > 第一条用户输入。
 - **用户输入的判定**：只有用户亲手输入的内容和斜杠命令算作"你"的消息；系统注入、任务通知、命令输出、compact 摘要和 Teammate Message 都不算，不参与消息数、分支、标题和"你"角色的搜索。
-- **计数口径**：消息数 = 用户输入 + assistant 消息（按 `message.id` 合并拆分的片段），只计主对话；token 按 `message.id` 只计一次，每个字段取各片段的最大值；Session 的 token 合计包含其 Subagent。
+- **计数口径**：消息数 = 用户输入 + assistant 消息（按 `message.id` 合并拆分的片段），只计主对话；token 按 `message.id` 只计一次，每个字段取各片段的最大值；Session 的 token 合计包含其 Subagent。同一条 assistant 消息出现在多个 Session 中时（resume / Fork 会把之前的对话复制进新 Session 的文件），token 和 API 金额只计入最早创建的那个 Session，统计也只计一次（与 ccusage 一致）；Session 被删除后，归属转给下一个仍包含它的 Session。消息数不受影响。
+- **API 金额**：参照 ccusage 的算法，按 LiteLLM 价格表逐条计算 assistant 消息：输入、输出、缓存读取、缓存写入各按单价计；缓存写入区分 5 分钟和 1 小时（1 小时按价格表中的单价，没有时按输入单价的 2 倍）；模型有 200K 以上单价时，各项超过 200K 的部分按该单价计；fast 模式乘以模型的 fast 倍率；条目自带 `costUSD`（旧版 Claude Code）时直接采用。模型名去掉 `[1m]`、`@地区`、日期后缀再匹配；匹配不到的消息不计入金额并单独计数，界面上提示"无价格"。
+- **价格表**：内置一份 LiteLLM 中 `claude-*` 模型的快照；启动时以及之后每 10 分钟检查一次，缓存超过一天就在后台重新下载 LiteLLM 价格表（ADR-0005），存到 Caches 下的 `pricing.json`，价格有变化时重新计算全部金额。下载失败沿用缓存或内置快照，不提示。
 - 数据根目录：默认 `~/.claude`，识别 `CLAUDE_CONFIG_DIR`，也可以在设置里修改；只支持一个数据根目录。不读取 `~/.claude/transcripts/`。
 
 ## 索引
@@ -54,8 +56,8 @@
 - 各栏头部、对话头部、统计页头部和底部状态栏可以按住拖动窗口（按钮、输入框除外）。
 - 窗口整体不随触摸板回弹，只有各栏内容区自身滚动。
 - 滚动条只在滚动时或指针停在滑块上时显示，不受系统"显示滚动条"设置影响。
-- Session 列表每行显示：标题、相对时间、消息数、token 数（可以排序）、Live 标记、git 分支；从统计下钻时，列表顶部显示可清除的筛选标签。
-- Session 头部显示：模型、token（输入/输出/缓存）、时长、消息数、工具调用次数、Subagent 数。
+- Session 列表每行显示：标题、相对时间、消息数、token 数、API 金额（时间、消息数、token、金额都可以排序）、Live 标记、git 分支；从统计下钻时，列表顶部显示可清除的筛选标签。
+- Session 头部显示：模型、token（输入/输出/缓存）、API 金额（含 Subagent；悬停显示按模型的明细，有无价格的消息时金额后带"+"）、时长、消息数、工具调用次数、Subagent 数。
 - 对话渲染：
   - 每个工具调用折叠成一行摘要；连续的工具调用合并成一组；失败的调用默认展开。
   - 专用渲染器：Bash（终端风格，支持 ANSI）、Edit（diff）、Write、Read（默认不展开内容）、AskUserQuestion、Task 清单；其他工具用通用 JSON 视图。
@@ -68,13 +70,13 @@
   - 当前 Session 读取失败时显示一行错误；源文件被删除时回到空状态。
 - Subagent：主对话中显示为卡片（任务 + 结果）；"查看完整过程"在右侧面板打开，嵌套时显示面包屑；后台 agent 的卡片和结果通知互相链接；Workflow 显示为一张总卡片。
 - 阅读便利：⌘F（会自动展开折叠的内容，包括工具组内的思考块和截断的工具输出）、`j`/`k` 按轮次跳转（对话框打开时不响应）、轮次大纲、复制消息/代码块/Bash 命令、复制 Session ID 和 `claude --resume <id>`、在 Finder 中显示。
-- 不做：导出、URL scheme、书签和笔记、金额换算、任何写 Session 的操作。
+- 不做：导出、URL scheme、书签和笔记、汇率换算、任何写 Session 的操作。
 
 ## 统计面板
 
-时间范围和 Project 过滤；概览卡片（Session 数、消息数、输出 token、活跃天数）；每日 token 柱状图（按模型堆叠，默认只看 output）；热力图（按日 / 星期 × 小时）；Project 排行；工具调用次数和失败率；按 agentType 的 Subagent 统计。页面背景铺满窗口高度，图表保持固定高度，不随窗口拉高；头部（标题、时间范围、Project 过滤）固定，只有下方内容滚动。
+时间范围和 Project 过滤；概览卡片（Session 数、消息数、输出 token、活跃天数、API 金额）；每日 token 柱状图（按模型堆叠，默认只看 output）；热力图（按日 / 星期 × 小时）；Project 排行（按 API 金额）；工具调用次数和失败率；按 agentType 的 Subagent 统计。页面背景铺满窗口高度，图表保持固定高度，不随窗口拉高；头部（标题、时间范围、Project 过滤）固定，只有下方内容滚动。
 
-- 口径：消息数和热力图只计主对话；token（概览、每日、Project 排行）包含 Subagent；工具调用包含 Subagent 内的调用。日期按本机时区划分。
+- 口径：消息数和热力图只计主对话；token 和 API 金额（概览、每日、Project 排行）包含 Subagent，跨 Session 重复的消息只计一次；工具调用包含 Subagent 内的调用。日期按本机时区划分。
 - 下钻：点击柱子、热力图格子、工具、agentType、模型图例会筛选 Session 列表，并带上当前的时间范围；点击 Project 排行则切换到该 Project。
 
 ## 诊断

@@ -5,7 +5,7 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSepara
 import type { Drill, ProjectSummary, SessionSort, SessionSummary } from "@/ipc/bindings";
 import { useLeadingInset } from "@/features/layout";
 import { cn } from "@/lib/cn";
-import { formatRelative, formatTokens } from "@/lib/format";
+import { formatCost, formatRelative, formatTokens } from "@/lib/format";
 import { useProjects, useSessionList } from "@/queries";
 import { useUi } from "@/state/ui";
 
@@ -16,6 +16,7 @@ const SORTS: { value: SessionSort; menu: string; order: string }[] = [
   { value: "created", menu: "创建", order: "创建时间" },
   { value: "messages", menu: "消息数", order: "消息数" },
   { value: "tokens", menu: "Token", order: "Token" },
+  { value: "cost", menu: "金额", order: "金额" },
 ];
 
 export function SessionList() {
@@ -191,6 +192,9 @@ function SessionRow({
         <span className="flex-1" />
         <span className="shrink-0">{s.messageCount} 条</span>
         <span className="shrink-0">{formatTokens(s.tokens.output)}</span>
+        <span data-testid="row-cost" className="shrink-0">
+          {formatCost(s.cost)}
+        </span>
       </div>
     </div>
   );

@@ -8,6 +8,14 @@ export function formatTokens(n: number): string {
   return `${trim(n / 1_000_000, 2)}M`;
 }
 
+/** 美元金额：0 -> "$0"，0.004 -> "<$0.01"，12.345 -> "$12.35"，1234.5 -> "$1,235"。 */
+export function formatCost(usd: number): string {
+  if (usd <= 0) return "$0";
+  if (usd < 0.01) return "<$0.01";
+  if (usd < 1000) return `$${usd.toFixed(2)}`;
+  return `$${Math.round(usd).toLocaleString("en-US")}`;
+}
+
 function trim(v: number, digits: number): string {
   return v.toFixed(digits).replace(/\.?0+$/, "");
 }

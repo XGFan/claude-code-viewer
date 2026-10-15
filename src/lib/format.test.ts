@@ -1,5 +1,15 @@
 import { describe, expect, it } from "vitest";
-import { formatDuration, formatRelative, formatTokens } from "./format";
+import { formatCost, formatDuration, formatRelative, formatTokens } from "./format";
+
+describe("formatCost", () => {
+  it("小额、常规与大额", () => {
+    expect(formatCost(0)).toBe("$0");
+    expect(formatCost(0.004)).toBe("<$0.01");
+    expect(formatCost(12.345)).toBe("$12.35");
+    expect(formatCost(999.994)).toBe("$999.99");
+    expect(formatCost(1234.5)).toBe("$1,235");
+  });
+});
 
 describe("formatTokens", () => {
   it("按量级缩写", () => {

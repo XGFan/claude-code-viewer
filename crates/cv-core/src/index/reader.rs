@@ -11,7 +11,7 @@ use super::writer::{role_from_db, title_source_from_db};
 use crate::assemble::AgentStats;
 use crate::error::CoreResult;
 use crate::model::{
-    Drill, FileRole, ForkChild, ForkOrigin, ProjectSummary, SessionQuery, SessionSort,
+    Drill, FileRole, ForkChild, ForkOrigin, ModelCost, ProjectSummary, SessionQuery, SessionSort,
     SessionSummary, TokenTotals,
 };
 use crate::stats;
@@ -138,7 +138,7 @@ fn summary_select(where_sql: &str) -> String {
          SELECT b.id, b.project_id, b.title, b.title_source, b.created_ms, b.last_active_ms,
             b.message_count, b.tool_call_count, b.subagent_count, b.in_tok, b.out_tok, b.cr_tok,
             b.cc_tok, b.git_branch, b.primary_model, b.origin, o.title,
-            CASE WHEN b.origin = b.fork_origin_id THEN b.fork_point_uuid END
+            CASE WHEN b.origin = b.fork_origin_id THEN b.fork_point_uuid END, b.cost, b.unpriced
          FROM b LEFT JOIN sessions o ON o.id = b.origin",
         origin = origin_expr("s")
     )
@@ -165,6 +165,8 @@ fn summary_from_row(r: &Row) -> rusqlite::Result<SessionSummary> {
             cache_read: r.get::<_, i64>(11)? as f64,
             cache_creation: r.get::<_, i64>(12)? as f64,
         },
+        cost: r.get(18)?,
+        unpriced_messages: r.get(19)?,
         git_branch: r.get(13)?,
         live: None,
         fork_origin: match origin {
@@ -239,7 +241,7 @@ pub fn list_sessions(conn: &Connection, q: &SessionQuery) -> CoreResult<Vec<Sess
             let range = in_range("m.ts_ms", &mut args);
             conds.push(format!(
                 "EXISTS (SELECT 1 FROM messages m WHERE m.session_id = s.id
-                    AND coalesce(m.model, ?) = ? AND m.role = {MSG_ASSISTANT}
+                    AND coalesce(m.model, ?) = ? AND m.role = {MSG_ASSISTANT} AND m.billed = 1
                     AND (m.in_tok > 0 OR m.out_tok > 0 OR m.cr_tok > 0 OR m.cc_tok > 0){range})"
             ));
         }
@@ -267,6 +269,7 @@ pub fn list_sessions(conn: &Connection, q: &SessionQuery) -> CoreResult<Vec<Sess
         SessionSort::Created => "coalesce(b.created_ms, b.last_active_ms)",
         SessionSort::Messages => "b.message_count",
         SessionSort::Tokens => "b.out_tok",
+        SessionSort::Cost => "b.cost",
     };
     let dir = if q.descending { "DESC" } else { "ASC" };
     let sql = format!(
@@ -365,6 +368,24 @@ pub fn session_detail(conn: &Connection, id: &str) -> CoreResult<Option<SessionD
         },
     )?;
     Ok(Some(row))
+}
+
+/// Cost per model of a session (main + subagents), most expensive first.
+pub fn model_costs(conn: &Connection, session_id: &str) -> CoreResult<Vec<ModelCost>> {
+    let mut st = conn.prepare_cached(&format!(
+        "SELECT coalesce(model, ?2), coalesce(sum(cost), 0), count(*) FILTER (WHERE cost IS NULL)
+         FROM messages WHERE session_id = ?1 AND role = {MSG_ASSISTANT} AND billed = 1
+            AND (in_tok > 0 OR out_tok > 0 OR cr_tok > 0 OR cc_tok > 0)
+         GROUP BY 1 ORDER BY 2 DESC, 1"
+    ))?;
+    let rows = st.query_map(params![session_id, stats::UNKNOWN], |r| {
+        Ok(ModelCost {
+            model: r.get(0)?,
+            cost: r.get(1)?,
+            unpriced_messages: r.get(2)?,
+        })
+    })?;
+    Ok(rows.collect::<Result<_, _>>()?)
 }
 
 /// Sessions whose Origin Session is `id` (via `forkedFrom` or the shared-root fallback).

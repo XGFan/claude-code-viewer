@@ -13,7 +13,8 @@ use parking_lot::Mutex;
 use tauri::{AppHandle, Manager};
 use tauri_specta::Event;
 
-use crate::events::{IndexStatusEvent, LiveChangedEvent, SessionsChangedEvent};
+use crate::events::{IndexStatusEvent, LiveChangedEvent, PricesChangedEvent, SessionsChangedEvent};
+use crate::prices;
 use crate::state::AppState;
 use crate::watcher::{self, Watcher};
 
@@ -36,6 +37,10 @@ pub enum Job {
     PollLive,
     /// Periodic stat rescan; also refreshes the watcher (new symlinked projects).
     Rescan,
+    /// Fetches the price list in the background when the cached one is a day old.
+    RefreshPrices,
+    /// A fetched price list (LiteLLM JSON) to adopt.
+    ApplyPrices(String),
 }
 
 /// Queues jobs; any job except `TextBacklog` also asks a running backlog to yield (after its
@@ -84,7 +89,8 @@ pub fn spawn(app: AppHandle, rx: Receiver<Job>, jobs: JobSender, backlog_cancel:
                 } else {
                     Job::PollLive
                 };
-                if !timer_jobs.send(job) {
+                let refresh = polls.is_multiple_of(RESCAN_EVERY_POLLS);
+                if !timer_jobs.send(job) || (refresh && !timer_jobs.send(Job::RefreshPrices)) {
                     break;
                 }
             }
@@ -100,6 +106,7 @@ pub fn spawn(app: AppHandle, rx: Receiver<Job>, jobs: JobSender, backlog_cancel:
                 backlog_cancel,
                 watcher: None,
                 last_status: Arc::new(Mutex::new(None)),
+                fetching_prices: Arc::new(AtomicBool::new(false)),
             }
             .run()
         })
@@ -161,6 +168,8 @@ struct Worker {
     watcher: Option<Watcher>,
     /// Time of the last emitted progress status (throttle).
     last_status: Arc<Mutex<Option<Instant>>>,
+    /// A price fetch is in flight.
+    fetching_prices: Arc<AtomicBool>,
 }
 
 fn log_err(op: &str, e: &CoreError) {
@@ -195,7 +204,41 @@ impl Worker {
                     self.scan_done(&engine, "rebuild", result);
                 }
                 Job::PollLive => self.poll_live(&engine),
+                Job::RefreshPrices => self.refresh_prices(&engine),
+                Job::ApplyPrices(json) => match engine.update_prices(&json) {
+                    Ok(true) => {
+                        let _ = PricesChangedEvent.emit(&self.app);
+                    }
+                    Ok(false) => {}
+                    Err(e) => log_err("update prices", &e),
+                },
             }
+        }
+    }
+
+    /// Fetches off the worker thread (a slow network must not hold up indexing) and hands the
+    /// result back as `ApplyPrices`. Failures keep the current table (cache or embedded snapshot).
+    fn refresh_prices(&self, engine: &Engine) {
+        if prices::is_fresh(engine.prices_fetched_at())
+            || self.fetching_prices.swap(true, Ordering::SeqCst)
+        {
+            return;
+        }
+        let jobs = self.jobs.clone();
+        let fetching = self.fetching_prices.clone();
+        let spawned = std::thread::Builder::new()
+            .name("cv-prices".into())
+            .spawn(move || {
+                match prices::fetch() {
+                    Ok(json) => {
+                        jobs.send(Job::ApplyPrices(json));
+                    }
+                    Err(e) => tracing::warn!("fetch prices: {e}"),
+                }
+                fetching.store(false, Ordering::SeqCst);
+            });
+        if spawned.is_err() {
+            self.fetching_prices.store(false, Ordering::SeqCst);
         }
     }
 

@@ -27,6 +27,8 @@ pnpm test:e2e e2e/m3-search.spec.ts -g "<title>"   # 单个 E2E
 E2E_PORT=1431 pnpm test:e2e                        # 并行跑多份时各用一个端口（默认 1421）
 
 pnpm bindings                  # 改了 IPC 类型/命令后重新生成 src/ipc/bindings.ts
+curl -sSf https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json \
+  | cargo run -p cv-core --example update_pricing   # 刷新内置价格快照
 pnpm tauri build --bundles app --target aarch64-apple-darwin
 ```
 
@@ -43,12 +45,14 @@ pnpm tauri build --bundles app --target aarch64-apple-darwin
 - `model/*` 是 IPC 类型的**唯一来源**（specta 导出）。改这里或 `src-tauri/src/commands.rs` 的签名后必须 `pnpm bindings`；`src/ipc/bindings.ts` 是生成文件，勿手改。
 - 索引是可丢弃的镜像（ADR-0003）：不写迁移，schema 变化就把 `index/schema.rs` 的 `SCHEMA_VERSION` +1，启动时自动删库重建。
 - 工具输出不进 FTS（ADR-0004），"包含工具输出"搜索是对源文件的并行流式扫描（`search/tool_output.rs`），可取消。
+- API 金额：`pricing.rs` 按 ccusage 的算法给单条消息定价，通过 SQLite 函数 `cv_cost` 写入 `messages.cost`。`writer::rebill` 实现去重：同一 `message.id` 出现在多个 Session 时只把最早 Session 那份标为 `billed`，Session 的 token / 金额列和统计只累加 billed 的消息。每次同步结束时，对变化的 Session 及与它们共享消息的 Session 重算（`engine::rebill_changed`）。价格表在 `Engine` 里，联网下载在 src-tauri（`prices.rs`，ADR-0005）。
 
 ### src-tauri
 
 - `commands.rs`：每个命令都是 async，通过 `with_engine` 把 Engine 调用丢到 blocking pool，错误转成 `AppError`（`message` 是面向用户的中文文案）。新增命令要同时登记到 `lib.rs` 的 `specta_builder()`。
 - `worker.rs`：单个后台 worker 通过 channel 消费 `Job`（FullScan / Fs 批次 / TextBacklog / Rebuild / SetRoot / PollLive / Rescan）。全文索引积压 `TextBacklog` 在空闲时运行，任何其他任务入队都会让它在当前事务提交后让位——改调度逻辑时注意别造成互相重新入队的活锁（曾出现过）。
-- `watcher.rs`（FSEvents，debounce 后发 `Fs` 任务）、`state.rs`（持有可整体替换的 Engine，切换数据根时 swap）、`settings.rs`（数据根覆盖，存于 Application Support）、`events.rs`（IndexStatus / SessionsChanged / LiveChanged 三个事件）。
+- `prices.rs`：下载 LiteLLM 价格表；worker 的 `RefreshPrices` 在独立线程里下载，结果以 `ApplyPrices` 交回 worker 写库，价格有变化时发 `PricesChanged` 事件。
+- `watcher.rs`（FSEvents，debounce 后发 `Fs` 任务）、`state.rs`（持有可整体替换的 Engine，切换数据根时 swap）、`settings.rs`（数据根覆盖，存于 Application Support）、`events.rs`（IndexStatus / SessionsChanged / LiveChanged / PricesChanged 四个事件）。
 
 ### src（前端）
 
@@ -60,7 +64,7 @@ pnpm tauri build --bundles app --target aarch64-apple-darwin
 
 ## 约束
 
-- **对数据根严格只读**（ADR-0002）：源文件只能用 `File::open` 读，绝不写入、移动、删除 `~/.claude` 下任何东西。应用自己的状态只放在 `~/Library/Caches/dev.joy.claude-viewer/`（索引）和 `~/Library/Application Support/dev.joy.claude-viewer/`（设置）。
+- **对数据根严格只读**（ADR-0002）：源文件只能用 `File::open` 读，绝不写入、移动、删除 `~/.claude` 下任何东西。应用自己的状态只放在 `~/Library/Caches/dev.joy.claude-viewer/`（索引、价格表缓存）和 `~/Library/Application Support/dev.joy.claude-viewer/`（设置）。
 - **测试 fixture**：`crates/cv-core/tests/fixtures/<场景>/` 是迷你数据根，由 `examples/sanitize.rs` 从真实 Session 脱敏生成；测试通过 `common::fixture_root(name)` 复制到临时目录使用，不要直接写 fixture 目录。`tests/fixtures_sanity.rs` 钉死了 fixture README 表格里的每个数字，并做敏感信息检查（`CV_FIXTURE_DENYLIST` 追加私有词）——改动或新增 fixture 时同步更新 README 表格和该测试，绝不提交未脱敏的真实数据。
 - 启动、后台调度、设置这类流程单测覆盖不到，需要 `pnpm tauri dev` 实测。
 - 在 macOS 27 上 release 构建依赖根 `Cargo.toml` 中 `profile.release.build-override` 的 `strip = "none"`，不要删。

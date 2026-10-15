@@ -94,6 +94,13 @@ export function useBackendEvents() {
         void qc.invalidateQueries({ queryKey: ["session"] });
       }),
     );
+    keep(
+      api.onPricesChanged(() => {
+        void qc.invalidateQueries({ queryKey: queryKeys.sessions() });
+        void qc.invalidateQueries({ queryKey: ["session"] });
+        void qc.invalidateQueries({ queryKey: ["stats"] });
+      }),
+    );
     keep(api.onIndexStatus((status) => qc.setQueryData(queryKeys.indexStatus, status)));
 
     return () => {

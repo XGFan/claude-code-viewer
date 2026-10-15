@@ -35,6 +35,7 @@ export const commands = {
 export const events = {
 	indexStatusEvent: makeEvent<IndexStatusEvent>("index-status-event"),
 	liveChangedEvent: makeEvent<LiveChangedEvent>("live-changed-event"),
+	pricesChangedEvent: makeEvent<PricesChangedEvent>("prices-changed-event"),
 	sessionsChangedEvent: makeEvent<SessionsChangedEvent>("sessions-changed-event"),
 };
 
@@ -271,6 +272,13 @@ export type LiveState = {
 
 export type LiveStatus = "busy" | "idle" | "unknown";
 
+export type ModelCost = {
+	model: string,
+	cost: number,
+	/**  Messages of this model without a price (all of them, or none). */
+	unpricedMessages: number,
+};
+
 export type NameCount = {
 	name: string,
 	count: number,
@@ -294,12 +302,16 @@ export type PersistedRef = {
 	sizeBytes: number,
 };
 
+/**  A newly fetched price list changed the API cost of indexed messages. */
+export type PricesChangedEvent = null;
+
 export type ProjectStat = {
 	projectId: string,
 	displayName: string,
 	sessions: number,
 	messages: number,
 	outputTokens: number,
+	cost: number,
 };
 
 export type ProjectSummary = {
@@ -383,6 +395,8 @@ export type SessionDetail = {
 	models: string[],
 	tokensMain: TokenTotals,
 	tokensSubagents: TokenTotals,
+	/**  Cost per model (main + subagents), most expensive first. */
+	modelCosts: ModelCost[],
 	versions: string[],
 	files: SourceFile[],
 	forks: ForkChild[],
@@ -403,7 +417,9 @@ export type SessionQuery = {
 
 export type SessionSort = "lastActive" | "created" | "messages" | 
 /**  Sorts by output tokens (main + subagents). */
-"tokens";
+"tokens" | 
+/**  Sorts by API cost (main + subagents). */
+"cost";
 
 export type SessionSummary = {
 	id: string,
@@ -417,6 +433,10 @@ export type SessionSummary = {
 	subagentCount: number,
 	/**  Main + all subagents. */
 	tokens: TokenTotals,
+	/**  API cost in USD, main + all subagents (see `pricing`); unpriced messages count as 0. */
+	cost: number,
+	/**  Assistant messages whose model has no price. */
+	unpricedMessages: number,
 	gitBranch: string | null,
 	live: LiveState | null,
 	forkOrigin: ForkOrigin | null,
@@ -461,6 +481,10 @@ export type StatsOverview = {
 	/**  Main + subagents. */
 	outputTokens: number,
 	activeDays: number,
+	/**  API cost in USD, main + subagents. */
+	cost: number,
+	/**  Assistant messages whose model has no price (not in `cost`). */
+	unpricedMessages: number,
 };
 
 /**  Days and week-hours are bucketed in local time (`chrono::Local`, DST-correct). */

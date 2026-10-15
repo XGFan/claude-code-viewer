@@ -2,6 +2,7 @@
 
 pub mod commands;
 pub mod events;
+pub mod prices;
 pub mod settings;
 pub mod state;
 pub mod watcher;
@@ -10,7 +11,7 @@ pub mod worker;
 use tauri::Manager;
 use tauri_specta::{Builder, ErrorHandlingMode, collect_commands, collect_events};
 
-use crate::events::{IndexStatusEvent, LiveChangedEvent, SessionsChangedEvent};
+use crate::events::{IndexStatusEvent, LiveChangedEvent, PricesChangedEvent, SessionsChangedEvent};
 use crate::state::{AppState, open_engine};
 
 /// The single source of commands and events, shared by the app and the bindings export.
@@ -39,7 +40,8 @@ pub fn specta_builder() -> Builder<tauri::Wry> {
         .events(collect_events![
             IndexStatusEvent,
             SessionsChangedEvent,
-            LiveChangedEvent
+            LiveChangedEvent,
+            PricesChangedEvent
         ])
         .error_handling(ErrorHandlingMode::Throw)
 }
@@ -60,6 +62,7 @@ pub fn run() {
             worker::spawn(app.handle().clone(), rx, jobs.clone(), backlog_cancel);
             // Starts the watcher, then FullScan -> TextBacklog.
             jobs.send(worker::Job::SetRoot);
+            jobs.send(worker::Job::RefreshPrices);
             Ok(())
         })
         .run(tauri::generate_context!())

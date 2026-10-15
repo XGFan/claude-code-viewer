@@ -1,7 +1,7 @@
 //! DDL and schema version (plan §4).
 
 /// `PRAGMA user_version`; any mismatch deletes and recreates the index.
-pub const SCHEMA_VERSION: u32 = 3;
+pub const SCHEMA_VERSION: u32 = 4;
 
 /// `files.role`.
 pub const ROLE_MAIN: i64 = 0;
@@ -43,15 +43,18 @@ CREATE TABLE sessions (
   main_in_tok INTEGER NOT NULL, main_out_tok INTEGER NOT NULL, main_cr_tok INTEGER NOT NULL, main_cc_tok INTEGER NOT NULL,
   git_branch TEXT, primary_model TEXT, models_json TEXT NOT NULL DEFAULT '[]', versions_json TEXT NOT NULL DEFAULT '[]',
   leaf_uuid TEXT, root_uuid TEXT, fork_origin_id TEXT, fork_point_uuid TEXT, is_empty INTEGER NOT NULL DEFAULT 0,
-  dup_uuids INTEGER NOT NULL DEFAULT 0);
+  dup_uuids INTEGER NOT NULL DEFAULT 0, cost REAL NOT NULL DEFAULT 0, unpriced INTEGER NOT NULL DEFAULT 0);
 CREATE INDEX sessions_project_active ON sessions(project_id, last_active_ms DESC);
 CREATE INDEX sessions_root ON sessions(root_uuid);
 CREATE TABLE messages (
   session_id TEXT NOT NULL, agent_id TEXT NOT NULL DEFAULT '', key TEXT NOT NULL, role INTEGER NOT NULL,
   ts_ms INTEGER NOT NULL, model TEXT, in_tok INTEGER NOT NULL DEFAULT 0, out_tok INTEGER NOT NULL DEFAULT 0,
   cr_tok INTEGER NOT NULL DEFAULT 0, cc_tok INTEGER NOT NULL DEFAULT 0,
+  cc1h_tok INTEGER NOT NULL DEFAULT 0, fast INTEGER NOT NULL DEFAULT 0, logged_cost REAL, cost REAL,
+  billed INTEGER NOT NULL DEFAULT 1,
   PRIMARY KEY (session_id, agent_id, key)) WITHOUT ROWID;
 CREATE INDEX messages_ts ON messages(ts_ms);
+CREATE INDEX messages_key ON messages(key);
 CREATE TABLE tool_calls (session_id TEXT NOT NULL, agent_id TEXT NOT NULL DEFAULT '', tool_use_id TEXT NOT NULL,
   name TEXT NOT NULL, ts_ms INTEGER, is_error INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (session_id, tool_use_id)) WITHOUT ROWID;
 CREATE INDEX tool_calls_name ON tool_calls(name);

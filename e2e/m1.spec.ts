@@ -178,3 +178,28 @@ test("Session 列表收起时，点选 Project 会自动展开列表", async ({ 
   await expect(page.getByTestId("pane-sessions")).toBeVisible();
   await expect(page.getByTestId("session-row").filter({ hasText: "迁移表单校验到 zod" })).toBeVisible();
 });
+
+test("头部显示 API 金额，悬停可看按模型明细", async ({ page }) => {
+  await openRich(page);
+  const cost = page.getByTestId("header").getByTestId("session-cost");
+  await expect(cost).toHaveText(/^API \$\d+\.\d{2}$/);
+  const title = (await cost.getAttribute("title"))!;
+  expect(title).toContain("claude-sonnet-5-5");
+  expect(title).toContain("claude-haiku-4-5");
+});
+
+test("Session 列表可按金额排序", async ({ page }) => {
+  await page.goto("/");
+  await page.getByRole("button", { name: "排序方式" }).click();
+  await page.getByRole("menuitem", { name: "金额" }).click();
+  const values = async () =>
+    (await page.getByTestId("row-cost").allTextContents()).map((c) => (c.startsWith("<") ? 0.005 : Number(c.replace(/[$,]/g, ""))));
+  // The list refetches after the sort changes; wait for the new order.
+  await expect.poll(async () => {
+    const v = await values();
+    return v.length > 3 && v.every((x, i) => i === 0 || v[i - 1] >= x);
+  }).toBe(true);
+  const costs = await page.getByTestId("row-cost").allTextContents();
+  // A session whose model has no price shows $0 (the untitled one has no model).
+  expect(costs).toContain("$0");
+});

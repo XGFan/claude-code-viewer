@@ -5,7 +5,7 @@ import { DropdownMenuContent, DropdownMenu, DropdownMenuTrigger } from "@/compon
 import type { Drill, Stats, TimeRange } from "@/ipc/bindings";
 import { useLeadingInset } from "@/features/layout";
 import { cn } from "@/lib/cn";
-import { formatDuration, formatTokens } from "@/lib/format";
+import { formatCost, formatDuration, formatTokens } from "@/lib/format";
 import { useProjects, useStats } from "@/queries";
 import { useUi } from "@/state/ui";
 import { Chart, useDark } from "./Chart";
@@ -114,6 +114,12 @@ function Overview({ stats, rangeDays }: { stats: Stats; rangeDays: number | null
     { id: "messages", label: "消息", value: num(o.messages), sub: o.activeDays ? `日均 ${num(Math.round(o.messages / o.activeDays))} 条` : "—" },
     { id: "tokens", label: "输出 token", value: formatTokens(o.outputTokens), sub: share || "—" },
     {
+      id: "cost",
+      label: "API 金额",
+      value: formatCost(o.cost),
+      sub: o.unpricedMessages > 0 ? `${num(o.unpricedMessages)} 条消息无价格，未计入` : o.activeDays ? `日均 ${formatCost(o.cost / o.activeDays)}` : "—",
+    },
+    {
       id: "active",
       label: "活跃天数",
       value: `${o.activeDays} / ${span}`,
@@ -121,7 +127,7 @@ function Overview({ stats, rangeDays }: { stats: Stats; rangeDays: number | null
     },
   ];
   return (
-    <div className="grid grid-cols-2 gap-3 @2xl:grid-cols-4">
+    <div className="grid grid-cols-2 gap-3 @2xl:grid-cols-3 @5xl:grid-cols-5">
       {cards.map((c) => (
         <div key={c.id} data-testid="stat-card" data-card={c.id} className="flex min-w-0 flex-col gap-0.5 rounded-[10px] border border-border bg-ground px-3.5 py-3">
           <span className="text-[12px] text-secondary">{c.label}</span>
@@ -214,9 +220,9 @@ export function StatsPanel() {
 
   const empty = stats != null && stats.overview.sessions === 0 && stats.daily.length === 0;
   const present = stats ? FAMILIES.filter((f) => stats.daily.some((d) => family(d.model) === f)) : [];
-  const maxProj = Math.max(1, ...(stats?.projects.map((p) => p.outputTokens) ?? []));
+  const maxProj = Math.max(0.01, ...(stats?.projects.map((p) => p.cost) ?? []));
   const maxTool = Math.max(1, ...(stats?.tools.map((t) => t.calls) ?? []));
-  const projects = stats ? [...stats.projects].sort((a, b) => b.outputTokens - a.outputTokens) : [];
+  const projects = stats ? [...stats.projects].sort((a, b) => b.cost - a.cost || b.outputTokens - a.outputTokens) : [];
   const tools = stats ? [...stats.tools].sort((a, b) => b.calls - a.calls) : [];
   const agents = stats ? [...stats.subagents].sort((a, b) => b.runs - a.runs) : [];
 
@@ -286,7 +292,7 @@ export function StatsPanel() {
                 )}
               </Card>
 
-              <Card title="Project 排行" aside={<span className="text-[11px] text-secondary">按输出 token</span>}>
+              <Card title="Project 排行" aside={<span className="text-[11px] text-secondary">按 API 金额</span>}>
                 {projects.length === 0 && <Empty />}
                 {projects.slice(0, 8).map((p) => (
                   <button
@@ -298,9 +304,11 @@ export function StatsPanel() {
                   >
                     <span className="flex text-[12px]">
                       <span className="flex-1 truncate">{p.displayName}</span>
-                      <span className="text-secondary tabular-nums">{formatTokens(p.outputTokens)}</span>
+                      <span className="text-secondary tabular-nums">
+                        {formatCost(p.cost)} · {formatTokens(p.outputTokens)}
+                      </span>
                     </span>
-                    <Bar pct={(p.outputTokens / maxProj) * 100} color={theme.series.opus} />
+                    <Bar pct={(p.cost / maxProj) * 100} color={theme.series.opus} />
                   </button>
                 ))}
               </Card>
