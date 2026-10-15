@@ -67,11 +67,14 @@ pub fn parse_bytes(buf: &[u8], base_offset: u64) -> ParsedChunk {
             Err("不是 JSON 对象".to_owned())
         };
         match parsed {
-            Ok(entry) => chunk.records.push(EntryRecord {
-                line_no,
-                offset,
-                entry,
-            }),
+            Ok(mut entry) => {
+                entry.normalize_queued_command();
+                chunk.records.push(EntryRecord {
+                    line_no,
+                    offset,
+                    entry,
+                });
+            }
             Err(e) => {
                 chunk.failed += 1;
                 if chunk.first_error.is_none() {

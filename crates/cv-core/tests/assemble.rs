@@ -1040,3 +1040,80 @@ fn real_root_assembles_every_session() {
     }
     assert!(panics.is_empty());
 }
+
+#[test]
+fn input_queued_while_claude_was_busy_shows_as_user_messages() {
+    let queued = |uuid: &str, parent: &str, attachment: &str| {
+        format!(
+            r#"{{"type":"attachment","uuid":"{uuid}","parentUuid":"{parent}","timestamp":"2026-10-15T04:01:10.111Z","attachment":{attachment}}}"#
+        )
+    };
+    let typed = queued(
+        "q1",
+        "r1",
+        r#"{"type":"queued_command","prompt":"给截图带上标注","commandMode":"prompt","origin":{"kind":"human"},"humanTurn":true}"#,
+    );
+    // Older versions: no `origin`; content blocks with an image.
+    let with_image = queued(
+        "q2",
+        "q1",
+        r#"{"type":"queued_command","prompt":[{"type":"text","text":"[Image #1]\n还有这种表现"},{"type":"image","source":{"type":"base64","media_type":"image/png","data":"iVBORw0KGgo="}}],"commandMode":"prompt"}"#,
+    );
+    let notification = queued(
+        "q3",
+        "q2",
+        r#"{"type":"queued_command","prompt":"<task-notification>\n<task-id>b1</task-id>\n<tool-use-id>t9</tool-use-id>\n<status>completed</status>\n</task-notification>","commandMode":"task-notification"}"#,
+    );
+    let peer = queued(
+        "q4",
+        "q3",
+        r#"{"type":"queued_command","prompt":"<agent-message from=\"impl\">done</agent-message>","commandMode":"prompt","origin":{"kind":"peer"}}"#,
+    );
+    let f = from_lines(&[
+        r#"{"type":"user","uuid":"u1","parentUuid":null,"message":{"role":"user","content":"截几张图"}}"#,
+        r#"{"type":"assistant","uuid":"a1","parentUuid":"u1","message":{"id":"m1","content":[{"type":"tool_use","id":"t1","name":"Bash","input":{"command":"x"}}]}}"#,
+        r#"{"type":"user","uuid":"r1","parentUuid":"a1","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","content":"ok"}]}}"#,
+        &typed,
+        &with_image,
+        &notification,
+        &peer,
+        r#"{"type":"assistant","uuid":"a2","parentUuid":"q4","message":{"id":"m2","content":[{"type":"text","text":"好的"}]}}"#,
+    ]);
+    let s = assemble(
+        "sid",
+        Path::new("/nonexistent"),
+        vec![f],
+        SessionSidecar::default(),
+    );
+    let t = main_t(&s, false);
+    let prompt = |id: &str| match &t
+        .nodes
+        .iter()
+        .find(|n| n.id == id)
+        .unwrap_or_else(|| panic!("{id} not shown"))
+        .body
+    {
+        NodeBody::UserPrompt {
+            text,
+            images,
+            origin,
+        } => (text.clone(), images.len(), origin.clone()),
+        b => panic!("{id}: unexpected {b:?}"),
+    };
+    assert_eq!(
+        prompt("q1"),
+        ("给截图带上标注".into(), 0, PromptOrigin::Human)
+    );
+    let (text, images, origin) = prompt("q2");
+    assert!(text.contains("还有这种表现"));
+    assert_eq!((images, origin), (1, PromptOrigin::Human));
+    assert!(matches!(
+        prompt("q3").2,
+        PromptOrigin::TaskNotification { .. }
+    ));
+    assert!(t.nodes.iter().any(|n| n.id == "q4"));
+
+    // The two typed prompts count as the user's messages; the notification and the peer don't.
+    let a = summarize(&s.skeleton);
+    assert_eq!(a.message_count, 5, "3 human prompts + 2 assistant messages");
+}

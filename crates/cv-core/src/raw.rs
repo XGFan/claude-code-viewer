@@ -87,9 +87,65 @@ pub struct RawEntry {
     pub compact_metadata: Option<RawCompactMetadata>,
 }
 
+/// `attachment` of a `queued_command` entry: input that arrived while Claude was busy (a prompt
+/// typed mid-turn, a background-task notification, a teammate message), delivered on the next
+/// turn. Claude Code records it only here, never as a `user` entry.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RawQueuedCommand {
+    #[serde(rename = "type", default, deserialize_with = "lenient::string")]
+    attachment_type: Option<String>,
+    /// The message content: a string or content blocks (text + images).
+    #[serde(default)]
+    prompt: Option<Box<RawValue>>,
+    /// `prompt`, `task-notification`, …
+    #[serde(default, deserialize_with = "lenient::string")]
+    command_mode: Option<String>,
+    #[serde(default, deserialize_with = "lenient::object")]
+    origin: Option<RawOrigin>,
+}
+
 impl RawEntry {
     pub fn entry_type(&self) -> &str {
         self.entry_type.as_deref().unwrap_or("")
+    }
+
+    /// Turns a `queued_command` attachment into the `user` entry it stands for (same uuid,
+    /// parent and timestamp), so it is classified, rendered, counted and indexed like any
+    /// other user message. Older entries without `origin` get it from `commandMode`.
+    pub fn normalize_queued_command(&mut self) {
+        if self.entry_type() != "attachment" {
+            return;
+        }
+        let Some(raw) = self.attachment.as_deref().map(RawValue::get) else {
+            return;
+        };
+        if !raw.contains("\"queued_command\"") {
+            return;
+        }
+        let Ok(q) = serde_json::from_str::<RawQueuedCommand>(raw) else {
+            return;
+        };
+        let Some(prompt) = q
+            .prompt
+            .filter(|_| q.attachment_type.as_deref() == Some("queued_command"))
+        else {
+            return;
+        };
+        let Ok(message) = serde_json::from_str::<RawMessage>(&format!(
+            r#"{{"role":"user","content":{}}}"#,
+            prompt.get()
+        )) else {
+            return;
+        };
+        self.entry_type = Some("user".to_owned());
+        self.message = Some(message);
+        self.origin = q.origin.or_else(|| {
+            (q.command_mode.as_deref() == Some("task-notification")).then(|| RawOrigin {
+                kind: Some("task-notification".to_owned()),
+            })
+        });
+        self.attachment = None;
     }
 
     /// Unix milliseconds parsed from `timestamp`.
