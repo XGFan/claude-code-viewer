@@ -124,3 +124,27 @@ test("本周期：按设定的每周重置时间统计，设置会被记住", as
   await expect(page.getByLabel("重置时间")).toHaveValue("14:00");
   await expect(span).toContainText("至 10月15日 周四 14:00，还剩 4 小时 0 分");
 });
+
+test("切到本周期时，标题栏不移动", async ({ page }) => {
+  await page.goto("/");
+  await page.getByTestId("nav-stats").click();
+  const heading = page.getByRole("heading", { name: "统计" });
+  const range = page.getByRole("group", { name: "时间范围" });
+  const before = [(await heading.boundingBox())!.y, (await range.boundingBox())!.y];
+  await page.getByRole("button", { name: "本周期" }).click();
+  await expect(page.getByTestId("cycle-bar")).toBeVisible();
+  expect([(await heading.boundingBox())!.y, (await range.boundingBox())!.y]).toEqual(before);
+});
+
+test("卡片高度随自身内容，不被同行更高的卡片撑高", async ({ page }) => {
+  await page.setViewportSize({ width: 1400, height: 900 });
+  await page.goto("/");
+  await page.getByTestId("nav-stats").click();
+  await page.getByTestId("daily-chart").locator("canvas").first().waitFor();
+  // Blank space below each card's last child: its 12px bottom padding plus the border, nothing more.
+  const slack = await page.getByTestId("stats").locator("section").evaluateAll((cards) =>
+    cards.map((c) => c.getBoundingClientRect().bottom - c.lastElementChild!.getBoundingClientRect().bottom),
+  );
+  expect(slack.length).toBeGreaterThanOrEqual(5);
+  for (const s of slack) expect(s).toBeLessThanOrEqual(14);
+});
