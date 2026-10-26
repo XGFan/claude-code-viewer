@@ -65,7 +65,18 @@ const askQuestions = [
       { label: "503", description: "与过载保护共用状态码" },
     ],
   },
+  {
+    question: "限流计数存在哪里？",
+    header: "存储",
+    multiSelect: false,
+    options: [
+      { label: "进程内存", description: "单实例足够，重启后清零" },
+      { label: "Redis", description: "多实例共享计数" },
+    ],
+  },
 ];
+
+const askAnswers = { "限流超限时应返回什么？": "429 + Retry-After", "限流计数存在哪里？": "先放内存，留好换 Redis 的接口" };
 
 export const richMain: Node[] = [
   userNode("n01", ts(), "给 lumen-api 的 /v1/chat 接口加一个基于令牌桶的限流中间件，按 API key 维度，默认每分钟 120 次。"),
@@ -159,8 +170,13 @@ export const richMain: Node[] = [
   asstNode("n10", ts(), [
     text("超限时的响应有两种常见做法，需要你确认。"),
     call("tu_ask", "AskUserQuestion", { questions: askQuestions }, {
-      text: 'User has answered your questions: "限流超限时应返回什么？"="429 + Retry-After".',
-      extraJson: JSON.stringify({ questions: askQuestions, answers: { "限流超限时应返回什么？": "429 + Retry-After" } }),
+      text: 'User has answered your questions: "限流超限时应返回什么？"="429 + Retry-After", "限流计数存在哪里？"="先放内存，留好换 Redis 的接口".',
+      timestampMs: t + 90_000,
+      extraJson: JSON.stringify({
+        questions: askQuestions,
+        answers: askAnswers,
+        annotations: { "限流超限时应返回什么？": { notes: "Retry-After 用秒数" } },
+      }),
     }),
   ]),
   asstNode("n12", ts(), [

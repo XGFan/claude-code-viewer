@@ -65,6 +65,23 @@ describe("tool-call groups", () => {
     expect(groups(rows)[0]!.items.map((i) => i.type)).toEqual(["call", "thinking", "call"]);
   });
 
+  it("AskUserQuestion stands alone between groups and needs no expansion to reveal", () => {
+    const g = buildRows(
+      input([
+        asstNode("a1", 1, [
+          call("t1", "Bash", {}, ok()),
+          call("t2", "Read", {}, ok()),
+          call("q1", "AskUserQuestion", { questions: [] }, ok()),
+          call("t3", "Bash", {}, ok()),
+          call("t4", "Read", {}, ok()),
+        ]),
+      ]),
+    );
+    expect(kinds(g.rows)).toEqual(["group", "ask", "group"]);
+    expect(rowIndexOf(g, "a1", "q1")).toBe(1);
+    expect(locate(g, "a1", "q1")?.expand).toEqual([]);
+  });
+
   it("locate opens the group holding a thinking block", () => {
     const g = buildRows(
       input([

@@ -112,12 +112,19 @@ test("图片缩略图渲染并可放大", async ({ page }) => {
   await expect(page.getByTestId("image-large")).toHaveCount(0);
 });
 
-test("AskUserQuestion 标出所选答案，任务清单显示状态", async ({ page }) => {
+test("AskUserQuestion 单独显示问题并标出你的回答，任务清单显示状态", async ({ page }) => {
   await openRich(page);
-  const ask = page.locator('[data-tool="AskUserQuestion"]');
+  const ask = page.getByTestId("ask");
   await reveal(page, ask);
-  await ask.getByRole("button").first().click();
-  await expect(ask.locator("[data-chosen]")).toContainText("429 + Retry-After");
+  // Shown expanded, outside any tool group.
+  await expect(page.locator('[data-testid="tool-group"] [data-testid="ask"]')).toHaveCount(0);
+  await expect(ask.getByTestId("ask-question")).toHaveCount(2);
+  await expect(ask.locator("[data-chosen]").first()).toContainText("429 + Retry-After");
+  await expect(ask.locator("[data-chosen]").nth(1)).toContainText("其他：先放内存，留好换 Redis 的接口");
+  await expect(ask.getByTestId("ask-status")).toContainText(/你 · \d\d:\d\d 已回答/);
+  await expect(ask.getByTestId("ask-question").first()).toContainText("备注：Retry-After 用秒数");
+  // The answer is marked in the card only, not repeated elsewhere.
+  await expect(page.getByTestId("transcript").getByText("先放内存，留好换 Redis 的接口")).toHaveCount(1);
   const todo = page.locator('[data-tool="TodoWrite"]');
   await reveal(page, todo);
   await todo.getByRole("button").first().click();

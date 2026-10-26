@@ -53,6 +53,7 @@ export type Row = RowBase &
     | ({ kind: "subagent"; role: RoleInfo | null } & AgentCardData)
     | { kind: "parallel"; node: Node; cards: AgentCardData[]; role: RoleInfo | null }
     | { kind: "workflow"; node: Node; call: ToolCallBlock; run: WorkflowRun; role: RoleInfo | null }
+    | { kind: "ask"; node: Node; call: ToolCallBlock; role: RoleInfo | null }
     | { kind: "unknownBlock"; node: Node; blockType: string; rawJson: string; role: RoleInfo | null }
     | { kind: "compact"; boundary: Node; summary: Node | null }
     | { kind: "node"; node: Node }
@@ -257,6 +258,11 @@ export function buildRows(input: GroupingInput): Grouping {
             flushGroup();
             cardCalls.add(b.toolUseId);
             push({ kind: "workflow", key: `${node.id}|${b.toolUseId}`, turn, node, call: b, run: wf, role: takeRole() }, [[node.id, b.toolUseId]]);
+          } else if (b.name === "AskUserQuestion") {
+            // Shown on its own as the question and the user's answer, never folded into a tool group.
+            flushGroup();
+            cardCalls.add(b.toolUseId);
+            push({ kind: "ask", key: `${node.id}|${b.toolUseId}`, turn, node, call: b, role: takeRole() }, [[node.id, b.toolUseId]]);
           } else if (group) {
             group.items.push(...heldThinking, { type: "call", node, call: b });
             heldThinking = [];

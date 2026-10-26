@@ -487,6 +487,39 @@ fn jump_maps_absorbed_results_and_flags_hidden() {
 }
 
 #[test]
+fn ask_answers_are_user_hits_that_jump_to_the_call() {
+    let env = indexed(&["basic"]);
+    let ask = "toolu_0118zFb2snzn5S8uBwkUiEUn";
+    let r = env
+        .engine
+        .search(&SearchRequest {
+            roles: vec![SearchRole::User],
+            ..req("consectetur adipis")
+        })
+        .unwrap();
+    let hits: Vec<_> = r
+        .groups
+        .iter()
+        .flat_map(|g| &g.hits)
+        .filter(|h| h.tool_use_id.as_deref() == Some(ask))
+        .collect();
+    assert_eq!(hits.len(), 1);
+    assert_eq!(hits[0].role, SearchRole::User);
+    let t = env
+        .engine
+        .resolve_jump(&JumpRequest {
+            session_id: ids::BASIC.to_owned(),
+            node_id: hits[0].node_id.clone(),
+            agent_id: None,
+            tool_use_id: hits[0].tool_use_id.clone(),
+        })
+        .unwrap();
+    assert_eq!(t.tool_use_id.as_deref(), Some(ask));
+    // The call's message is displayed under its first fragment.
+    assert_eq!(t.node_id, "e690b132-a297-4571-8770-7a7fe24e9456");
+}
+
+#[test]
 fn append_makes_new_text_searchable_including_cjk_and_quotes() {
     let env = indexed(&["basic"]);
     let main =

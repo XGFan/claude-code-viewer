@@ -406,7 +406,7 @@ fn extra_fields(tool: &str) -> &'static [&'static str] {
             "returnCodeInterpretation",
             "backgroundTaskId",
         ],
-        "AskUserQuestion" => &["questions", "answers"],
+        "AskUserQuestion" => &["questions", "answers", "annotations"],
         "Edit" => &["structuredPatch"],
         t if t.starts_with("Task") && t != "Task" => &["task", "statusChange"],
         _ => &[],

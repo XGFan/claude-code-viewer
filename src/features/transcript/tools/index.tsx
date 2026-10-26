@@ -1,5 +1,5 @@
 import type { ToolCall, TranscriptScope } from "@/ipc/bindings";
-import { AskView, BashView, CompactView, EditView, GenericView, ReadView, TaskView, WriteView } from "./renderers";
+import { BashView, CompactView, EditView, GenericView, ReadView, TaskView, WriteView } from "./renderers";
 import { useToolCtx } from "./data";
 
 export { ImageRefs, ImageThumb } from "./parts";
@@ -46,8 +46,6 @@ export function ToolCallView({ nodeId, call, startMs, sessionId, scope }: ToolCa
       return <WriteView {...p} />;
     case "Read":
       return <ReadView {...p} />;
-    case "AskUserQuestion":
-      return <AskView {...p} />;
     case "TodoWrite":
     case "TaskCreate":
     case "TaskUpdate":

@@ -3,6 +3,7 @@ import { cn } from "@/lib/cn";
 import type { Row } from "../grouping";
 import { FinalResultCard, OrphanHeader, ParallelAgents, SubagentCard, TaskPromptCard, WorkflowCard } from "./Agents";
 import { Anchor } from "./Anchor";
+import { AskRow } from "./Ask";
 import { AssistantRow, AssistantSegment } from "./Assistant";
 import { InheritedBanner, InheritedDivider } from "./Fork";
 import { AttachmentLine, CompactRow, CompactSummaryCard, SystemLine, UnknownJson } from "./Misc";
@@ -50,6 +51,8 @@ export function RowView({ row }: { row: Row }) {
           <WorkflowCard run={row.run} node={row.node} call={row.call} />
         </AssistantSegment>
       );
+    case "ask":
+      return <AskRow node={row.node} call={row.call} role={row.role} />;
     case "compact":
       return <CompactRow boundary={row.boundary} summary={row.summary} />;
     case "node":

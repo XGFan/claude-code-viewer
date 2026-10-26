@@ -197,7 +197,7 @@ pub struct ToolResult {
     pub persisted: Option<PersistedRef>,
     /// Capped (≤ 8 KB, whole fields dropped) subset of `toolUseResult`:
     /// Bash {stdout,stderr,interrupted,returnCodeInterpretation,backgroundTaskId},
-    /// AskUserQuestion {questions,answers}, Task* {task,statusChange}, Edit {structuredPatch?}.
+    /// AskUserQuestion {questions,answers,annotations}, Task* {task,statusChange}, Edit {structuredPatch?}.
     pub extra_json: Option<String>,
 }
 

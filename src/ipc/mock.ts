@@ -86,6 +86,13 @@ interface Doc {
   hidden: boolean;
 }
 
+/** AskUserQuestion answers and notes are searchable as the user's words. */
+interface AskExtra {
+  questions?: unknown;
+  answers?: Record<string, string>;
+  annotations?: Record<string, { notes?: string }>;
+}
+
 function docsOf(sessionId: string, nodes: Node[], agentId: string | null, onMainLine: boolean): Doc[] {
   const out: Doc[] = [];
   const push = (n: Node, role: SearchRole, text: string, toolUseId: string | null = null) =>
@@ -99,6 +106,11 @@ function docsOf(sessionId: string, nodes: Node[], agentId: string | null, onMain
         else if (blk.kind === "toolCall") {
           push(n, "toolInput", blk.inputJson, blk.toolUseId);
           if (blk.result) push(n, "toolOutput", blk.result.text, blk.toolUseId);
+          const ask = blk.result?.extraJson ? (JSON.parse(blk.result.extraJson) as AskExtra) : null;
+          if (ask?.questions && ask.answers) {
+            const notes = Object.values(ask.annotations ?? {}).map((a) => a.notes ?? "");
+            push(n, "user", [...Object.values(ask.answers), ...notes].filter(Boolean).join("\n"), blk.toolUseId);
+          }
         }
       }
     }

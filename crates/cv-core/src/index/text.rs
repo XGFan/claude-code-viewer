@@ -1,8 +1,9 @@
 //! Full-text document extraction and the FTS backlog (plan §4 "What gets indexed").
 //!
 //! Indexed: human/command prompt text and assistant `text` blocks (64 KB each), tool inputs
-//! (16 KB; per-tool fields, else every JSON string leaf). Never indexed: attachments, meta and
-//! system entries, task notifications, compact summaries, thinking, images, tool outputs.
+//! (16 KB; per-tool fields, else every JSON string leaf), AskUserQuestion answers and notes (as
+//! the user's words, on the tool result entry). Never indexed: attachments, meta and system
+//! entries, task notifications, compact summaries, thinking, images, other tool outputs.
 
 use std::collections::{HashMap, HashSet};
 use std::fs::File;
@@ -16,6 +17,7 @@ use serde_json::Value;
 use crate::assemble::prompt;
 use crate::error::{CoreError, CoreResult};
 use crate::parse::{EntryRecord, parse_bytes};
+use crate::raw::RawEntry;
 
 /// Cap of a prompt or assistant text document.
 pub const TEXT_CAP: usize = 64 * 1024;
@@ -69,6 +71,9 @@ pub fn extract_docs(rec: &EntryRecord, agent_id: Option<&str>) -> Vec<TextDoc> {
             if prompt::is_human_prompt(e) && !text.trim().is_empty() {
                 out.push(doc(0, DocRole::User, cap(text, TEXT_CAP), None));
             }
+            if let Some((bi, body, tool_use_id)) = answer_doc(e) {
+                out.push(doc(bi, DocRole::User, cap(body, TEXT_CAP), tool_use_id));
+            }
         }
         "assistant" => {
             for (bi, b) in e.blocks().iter().enumerate() {
@@ -101,6 +106,48 @@ pub fn extract_docs(rec: &EntryRecord, agent_id: Option<&str>) -> Vec<TextDoc> {
         _ => {}
     }
     out
+}
+
+/// AskUserQuestion answers and notes of a tool result entry: `(tool_result block index, text,
+/// tool_use_id)`. Recognized by the `toolUseResult` shape (`questions` + `answers`), since the
+/// result entry does not name its tool.
+fn answer_doc(e: &RawEntry) -> Option<(usize, String, Option<String>)> {
+    let raw = e.tool_use_result.as_deref()?;
+    if !raw.get().starts_with('{') {
+        return None;
+    }
+    let v: Value = serde_json::from_str(raw.get()).ok()?;
+    let questions = v.get("questions")?;
+    let answers = v.get("answers")?.as_object()?;
+    let notes = v.get("annotations").and_then(Value::as_object);
+    // In question order; answers keyed by anything else follow.
+    let mut keys: Vec<&str> = questions
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|q| q.get("question")?.as_str())
+        .collect();
+    let rest: Vec<&str> = answers
+        .keys()
+        .map(String::as_str)
+        .filter(|k| !keys.contains(k))
+        .collect();
+    keys.extend(rest);
+    let mut parts: Vec<&str> = Vec::new();
+    for k in keys {
+        parts.extend(answers.get(k).and_then(Value::as_str));
+        parts.extend(notes.and_then(|n| n.get(k)?.get("notes")?.as_str()));
+    }
+    let body = parts.join("\n");
+    if body.trim().is_empty() {
+        return None;
+    }
+    let (bi, b) = e
+        .blocks()
+        .iter()
+        .enumerate()
+        .find(|(_, b)| b.block_type() == "tool_result")?;
+    Some((bi, body, b.tool_use_id.clone()))
 }
 
 /// Indexed text of a tool input: the tool's key fields, else every string leaf.
@@ -346,6 +393,26 @@ mod tests {
         ] {
             assert!(docs(line).is_empty(), "{line}");
         }
+    }
+
+    #[test]
+    fn indexes_ask_answers_as_user_words() {
+        let d = docs(
+            r#"{"type":"user","uuid":"r","message":{"content":[{"type":"tool_result","tool_use_id":"t9","content":"User has answered"}]},"toolUseResult":{"questions":[{"question":"Q1"},{"question":"Q2"}],"answers":{"Q2":"自定义的命名","Q1":"429 + Retry-After"},"annotations":{"Q1":{"notes":"记得加 Retry-After 头","preview":"x"}}}}"#,
+        );
+        assert_eq!(d.len(), 1);
+        assert_eq!(d[0].role, DocRole::User);
+        assert_eq!(d[0].tool_use_id.as_deref(), Some("t9"));
+        assert_eq!(
+            d[0].body,
+            "429 + Retry-After\n记得加 Retry-After 头\n自定义的命名"
+        );
+
+        // Other tools' structured results stay out.
+        let d = docs(
+            r#"{"type":"user","uuid":"r","message":{"content":[{"type":"tool_result","tool_use_id":"t","content":"ok"}]},"toolUseResult":{"stdout":"answers","stderr":""}}"#,
+        );
+        assert!(d.is_empty());
     }
 
     #[test]

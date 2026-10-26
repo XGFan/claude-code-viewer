@@ -34,6 +34,18 @@ test("Enter 打开命中所在 Session", async ({ page }) => {
   await expect(page.getByTestId("header").getByRole("heading", { name: title })).toBeVisible();
 });
 
+test("按「你」搜索能搜到 AskUserQuestion 的回答，打开后定位到问答", async ({ page }) => {
+  await openSearch(page);
+  await page.getByRole("button", { name: /角色：/ }).click();
+  await page.getByRole("menuitem", { name: "你" }).click();
+  await input(page).fill("留好换 Redis");
+  const hit = page.getByTestId("search-hit").first();
+  await expect(hit).toContainText("你");
+  await hit.click();
+  await expect(page.getByTestId("search")).toHaveCount(0);
+  await expect(page.getByTestId("ask")).toBeInViewport();
+});
+
 test("Subagent 内的命中带 Subagent 标签，点击后跳转", async ({ page }) => {
   await openSearch(page);
   await input(page).fill("cors");
