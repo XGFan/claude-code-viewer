@@ -2,7 +2,7 @@ import type { Activity, ActivityBucket, DailyModelTokens } from "@/ipc/bindings"
 import type { ChartOption } from "@/lib/echarts";
 import { formatTokens } from "@/lib/format";
 
-/** Reference dataviz palette (validated): categorical slots 1-3 + 7, blue sequential ramp. */
+/** Reference dataviz palette (validated): categorical slots 1-3 + 7. */
 export interface Theme {
   surface: string;
   ink: string;
@@ -10,7 +10,6 @@ export interface Theme {
   grid: string;
   axis: string;
   tooltipBg: string;
-  ramp: string[];
   series: Record<ModelFamily, string>;
   ioInput: string;
   ioOutput: string;
@@ -26,7 +25,6 @@ export const themes: Record<"light" | "dark", Theme> = {
     grid: "#e1e0d9",
     axis: "#c3c2b7",
     tooltipBg: "#ffffff",
-    ramp: ["#ebeae6", "#cde2fb", "#86b6ef", "#3987e5", "#1c5cab", "#104281"],
     series: { opus: "#2a78d6", sonnet: "#eb6834", haiku: "#1baf7a", other: "#4a3aa7" },
     ioInput: "#86b6ef",
     ioOutput: "#1c5cab",
@@ -38,7 +36,6 @@ export const themes: Record<"light" | "dark", Theme> = {
     grid: "#2c2c2a",
     axis: "#383835",
     tooltipBg: "#2c2c2f",
-    ramp: ["#2c2c2a", "#184f95", "#256abf", "#3987e5", "#6da7ec", "#b7d3f6"],
     series: { opus: "#3987e5", sonnet: "#d95926", haiku: "#199e70", other: "#9085e9" },
     ioInput: "#256abf",
     ioOutput: "#b7d3f6",

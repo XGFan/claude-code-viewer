@@ -1,5 +1,4 @@
 import { useUi } from "@/state/ui";
-import { DiagnosticsPage } from "@/features/diagnostics";
 import { FindBar } from "@/features/find";
 import { Toolbar, useSessionsHidden } from "@/features/layout";
 import { Outline } from "@/features/outline";
@@ -14,10 +13,9 @@ import { TranscriptView } from "@/features/transcript";
 import { cn } from "@/lib/cn";
 
 export default function App() {
-  const view = useUi((s) => s.view);
   const sessionId = useUi((s) => s.sessionId);
   // Besides the user's toggle, the Subagent panel takes the session list's width so the conversation keeps
-  // a readable column, and diagnostics spans that column too.
+  // a readable column.
   const hideList = useSessionsHidden().hidden;
 
   return (
@@ -35,26 +33,14 @@ export default function App() {
         </section>
 
         <main data-testid="pane-conversation" className="flex min-h-0 min-w-0 flex-col bg-ground">
-          {view === "sessions" && (
-            <>
-              {!sessionId && <div data-tauri-drag-region="deep" className="h-[52px] shrink-0" />}
-              <SessionHeader />
-              <FindBar />
-              <div className="flex min-h-0 flex-1">
-                <TranscriptView />
-                <Outline />
-                <SubagentPanel />
-              </div>
-            </>
-          )}
-          {view === "diagnostics" && (
-            <>
-              <div data-tauri-drag-region="deep" className="h-[52px] shrink-0" />
-              <div className="min-h-0 flex-1 overflow-auto">
-                <DiagnosticsPage />
-              </div>
-            </>
-          )}
+          {!sessionId && <div data-tauri-drag-region="deep" className="h-[52px] shrink-0" />}
+          <SessionHeader />
+          <FindBar />
+          <div className="flex min-h-0 flex-1">
+            <TranscriptView />
+            <Outline />
+            <SubagentPanel />
+          </div>
         </main>
       </div>
       <StatusBar />

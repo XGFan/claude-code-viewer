@@ -25,7 +25,6 @@ export function SessionList() {
   const projectIds = useUi((s) => s.projectIds);
   const sessionId = useUi((s) => s.sessionId);
   const selectSession = useUi((s) => s.selectSession);
-  const setView = useUi((s) => s.setView);
   const sort = useUi((s) => s.sessionSort);
   const descending = useUi((s) => s.sessionDescending);
   const setSort = useUi((s) => s.setSessionSort);
@@ -47,7 +46,6 @@ export function SessionList() {
 
   const open = (id: string) => {
     selectSession(id);
-    setView("sessions");
   };
   const onKeyDown = (e: KeyboardEvent) => {
     if (e.key !== "ArrowDown" && e.key !== "ArrowUp") return;
@@ -220,16 +218,12 @@ function SessionRow({
   );
 }
 
-const WEEKDAYS = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"];
-
 function drillLabel(d: Drill): string {
   switch (d.kind) {
     case "day": {
       const [, m, day] = d.day.split("-");
       return `${Number(m)}月${Number(day)}日`;
     }
-    case "weekHour":
-      return `${WEEKDAYS[d.weekday] ?? ""} ${d.hour} 时`;
     case "model":
       return `模型 ${d.model}`;
     case "span":

@@ -37,7 +37,7 @@
 
 索引只镜像数据目录当前内容：源文件被删，对应 Session 也随之消失；升级后索引格式变化会自动重建（[ADR-0003](docs/adr/0003-index-is-disposable-mirror.md)）。索引放在 Caches 中，不进入 Time Machine 备份。
 
-首次启动时先扫描元数据（3 GB 数据约 2–3 秒），列表即可浏览；全文索引在后台建立（约 2–3 分钟，索引约 760 MB），期间状态栏显示进度，搜索结果不完整。工具输出不进索引，暂不提供搜索（[ADR-0004](docs/adr/0004-tool-output-scanned-not-indexed.md)）。
+首次启动时先扫描元数据（3 GB 数据约 2–3 秒），列表即可浏览；全文索引在后台建立（约 2–3 分钟，索引约 760 MB），期间状态栏显示进度，搜索结果不完整。工具输出不进索引，也不提供搜索（[ADR-0004](docs/adr/0004-tool-output-scanned-not-indexed.md)）。
 
 ## 数据目录
 

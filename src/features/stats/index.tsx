@@ -286,7 +286,6 @@ function StatsPanel() {
     ui.setProjectIds([]);
     ui.setStatsDrill(d, timeRange);
     ui.selectSession(null);
-    ui.setView("sessions");
     ui.setStatsOpen(false);
   };
   const openSession = (id: string) => {
@@ -294,7 +293,6 @@ function StatsPanel() {
     ui.setProjectIds([]);
     ui.setStatsDrill(null);
     ui.selectSession(id);
-    ui.setView("sessions");
     ui.setStatsOpen(false);
   };
 

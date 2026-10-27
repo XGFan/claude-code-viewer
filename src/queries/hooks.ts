@@ -45,7 +45,7 @@ export function useSessionList() {
   const descending = useUi((s) => s.sessionDescending);
   const drill = useUi((s) => s.statsDrill);
   const drillRange = useUi((s) => s.statsDrillRange);
-  return useSessions({ projectIds, sort, descending, liveOnly: false, timeRange: drill ? drillRange : null, drill });
+  return useSessions({ projectIds, sort, descending, timeRange: drill ? drillRange : null, drill });
 }
 
 export const useSession = (sessionId: string | null) =>

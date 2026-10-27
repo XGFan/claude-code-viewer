@@ -5,13 +5,12 @@ use std::sync::Arc;
 
 use cv_core::model::{
     AppError, AppInfo, Diagnostics, ErrorCode, FindRequest, FindResult, ImageData, ImageRequest,
-    IndexStatus, JumpRequest, JumpTarget, ProjectSummary, SearchHandle, SearchRequest,
-    SearchResponse, SessionDetail, SessionQuery, SessionSummary, Stats, StatsRequest, ToolDetail,
-    ToolDetailRequest, ToolOutputSearchEvent, Transcript, TranscriptRequest,
+    IndexStatus, JumpRequest, JumpTarget, ProjectSummary, SearchRequest, SearchResponse,
+    SessionDetail, SessionQuery, SessionSummary, Stats, StatsRequest, ToolDetail,
+    ToolDetailRequest, Transcript, TranscriptRequest,
 };
 use cv_core::{CoreError, CoreResult, Engine};
-use tauri::ipc::Channel;
-use tauri::{AppHandle, Manager, State};
+use tauri::State;
 
 use crate::settings::{self, Settings};
 use crate::state::{AppState, open_engine};
@@ -66,7 +65,6 @@ pub async fn set_data_root(state: State<'_, AppState>, path: Option<String>) -> 
     .map_err(internal)?
     .map_err(AppError::from)?;
     let info = engine.app_info();
-    state.cancel_all_searches();
     *state.engine.write() = Arc::new(engine);
     state.jobs.send(Job::SetRoot);
     Ok(info)
@@ -137,38 +135,6 @@ pub async fn get_image(state: State<'_, AppState>, req: ImageRequest) -> CmdResu
 #[specta::specta]
 pub async fn search(state: State<'_, AppState>, req: SearchRequest) -> CmdResult<SearchResponse> {
     with_engine(&state, move |e| e.search(&req)).await
-}
-
-/// Starts a streaming tool-output scan; events arrive on `on_event` until `Done`.
-#[tauri::command]
-#[specta::specta]
-pub async fn search_tool_output(
-    app: AppHandle,
-    state: State<'_, AppState>,
-    req: SearchRequest,
-    on_event: Channel<ToolOutputSearchEvent>,
-) -> CmdResult<SearchHandle> {
-    let engine: Arc<Engine> = state.engine();
-    let (search_id, cancel) = state.start_search();
-    tauri::async_runtime::spawn_blocking(move || {
-        let mut sink = |ev: ToolOutputSearchEvent| {
-            let _ = on_event.send(ev);
-        };
-        if let Err(e) = engine.search_tool_output(&req, &cancel, &mut sink) {
-            sink(ToolOutputSearchEvent::Error {
-                message: AppError::from(e).message,
-            });
-        }
-        app.state::<AppState>().finish_search(search_id);
-    });
-    Ok(SearchHandle { search_id })
-}
-
-#[tauri::command]
-#[specta::specta]
-pub async fn cancel_search(state: State<'_, AppState>, search_id: u32) -> CmdResult<()> {
-    state.cancel_search(search_id);
-    Ok(())
 }
 
 #[tauri::command]

@@ -109,7 +109,7 @@ function NameCountSection({ title, rows, testId }: { title: string; rows: NameCo
   );
 }
 
-/** Body of the "格式兼容性" tab and of the standalone diagnostics view. */
+/** Body of the "格式兼容性" settings tab. */
 export function DiagnosticsContent() {
   const qc = useQueryClient();
   const { data: d, error } = useDiagnostics();
@@ -239,14 +239,6 @@ export function DiagnosticsContent() {
           孤立 Subagent <b className="tabular-nums text-text">{nf.format(d.orphanSubagents)}</b>
         </span>
       </div>
-    </div>
-  );
-}
-
-export function DiagnosticsPage() {
-  return (
-    <div className="mx-auto w-full max-w-[920px] px-6 pb-6 pt-2">
-      <DiagnosticsContent />
     </div>
   );
 }

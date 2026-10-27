@@ -86,15 +86,6 @@ pub struct Activity {
 
 #[derive(Serialize, Deserialize, Type, Clone, Debug, PartialEq)]
 #[serde(rename_all = "camelCase")]
-pub struct WeekHourCount {
-    /// 0 = Monday.
-    pub weekday: u32,
-    pub hour: u32,
-    pub messages: u32,
-}
-
-#[derive(Serialize, Deserialize, Type, Clone, Debug, PartialEq)]
-#[serde(rename_all = "camelCase")]
 pub struct SessionStat {
     pub session_id: SessionId,
     pub title: String,
@@ -112,7 +103,6 @@ pub struct Stats {
     pub overview: StatsOverview,
     pub daily: Vec<DailyModelTokens>,
     pub heat_daily: Vec<DayCount>,
-    pub heat_week_hour: Vec<WeekHourCount>,
     pub activity: Activity,
     /// The most expensive sessions in range (at most [`crate::stats::TOP_SESSIONS`]).
     pub sessions: Vec<SessionStat>,

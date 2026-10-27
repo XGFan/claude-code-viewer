@@ -27,7 +27,7 @@ const MAX_PROJECTS = 3;
 const MAX_SESSIONS = 8;
 const MAX_RECENT = 20;
 const HITS_PER_SESSION = 5;
-const ALL_RECENT: SessionQuery = { projectIds: [], sort: "lastActive", descending: true, liveOnly: false, timeRange: null, drill: null };
+const ALL_RECENT: SessionQuery = { projectIds: [], sort: "lastActive", descending: true, timeRange: null, drill: null };
 const MODE_HINT: Partial<Record<SearchMode, string>> = { like: "短词匹配", mixed: "短词匹配" };
 const NO_GROUPS: SearchGroup[] = [];
 
@@ -140,10 +140,8 @@ function HitRow({ value, hit, disabled, onOpen }: { value: string; hit: SearchHi
       ? "你"
       : hit.role === "assistant"
         ? "Claude"
-        : hit.role === "toolInput"
-          ? "工具输入"
-          : "工具输出";
-  const mono = hit.role !== "user" && hit.role !== "assistant";
+        : "工具输入";
+  const mono = hit.role === "toolInput";
   return (
     <Command.Item
       value={value}
@@ -242,7 +240,7 @@ export function SearchOverlay() {
 
   const ftsQuery = ftsText.trim();
   const req = useMemo<SearchRequest>(
-    () => ({ query: ftsQuery, projectId: scope, timeRange: null, roles: [], liveOnly: false, maxSessions: 50, hitsPerSession: HITS_PER_SESSION }),
+    () => ({ query: ftsQuery, projectId: scope, maxSessions: 50, hitsPerSession: HITS_PER_SESSION }),
     [ftsQuery, scope],
   );
   // An all-exclusion query is rejected by the backend; there is nothing to search for.
@@ -291,7 +289,6 @@ export function SearchOverlay() {
     showSession(s);
     const ui = useUi.getState();
     ui.selectSession(s.id);
-    ui.setView("sessions");
     close();
   };
   const openHit = async (g: SearchGroup, hit: SearchHit) => {
@@ -309,7 +306,6 @@ export function SearchOverlay() {
   const filterProject = (id: string) => {
     const ui = useUi.getState();
     ui.setProjectIds([id]);
-    ui.setView("sessions");
     // Picking a Project is a request to see its Sessions; a collapsed list would show nothing.
     if (ui.collapsed.sessions) ui.toggleCollapsed("sessions");
     close();

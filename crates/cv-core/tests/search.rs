@@ -11,8 +11,7 @@ use std::sync::atomic::AtomicBool;
 use common::{copy_dir_all, fixture_dir, fixture_root, ids};
 use cv_core::model::{
     AppError, DataRootSource, ErrorCode, FindLocation, FindRequest, JumpRequest, SearchMode,
-    SearchRequest, SearchResponse, SearchRole, ToolOutputSearchEvent, TranscriptRequest,
-    TranscriptScope,
+    SearchRequest, SearchResponse, SearchRole, TranscriptRequest, TranscriptScope,
 };
 use cv_core::search::query::{fts_phrase, is_fts_term};
 use cv_core::search::{fts, parse_query};
@@ -78,9 +77,6 @@ fn req(query: &str) -> SearchRequest {
     SearchRequest {
         query: query.to_owned(),
         project_id: None,
-        time_range: None,
-        roles: Vec::new(),
-        live_only: false,
         max_sessions: 50,
         hits_per_session: 50,
     }
@@ -177,8 +173,8 @@ fn fts_and_like_agree_on_ascii() {
         "lorem -ipsum",
         "tests -unit",
     ] {
-        let a = fts::run(&db, &req(q), &[], false).unwrap();
-        let b = fts::run(&db, &req(q), &[], true).unwrap();
+        let a = fts::run(&db, &req(q), false).unwrap();
+        let b = fts::run(&db, &req(q), true).unwrap();
         assert_eq!(b.mode, SearchMode::Like);
         assert_ne!(a.mode, SearchMode::Like, "{q}");
         assert!(a.total_hits > 0, "{q} finds something");
@@ -233,7 +229,7 @@ fn search_hits_snippets_and_case() {
 }
 
 #[test]
-fn project_role_time_and_live_filters() {
+fn project_filter_tool_inputs_and_grouping_limits() {
     let env = indexed(&["basic", "branch"]);
     let db = env.db();
     let project: String = db
@@ -256,21 +252,8 @@ fn project_role_time_and_live_filters() {
     assert_eq!(r.groups.len(), 1);
     assert_eq!(r.groups[0].session.id, ids::BASIC);
 
-    // The Bash command only exists as a tool input.
-    let tool_only = |roles: Vec<SearchRole>| {
-        env.engine
-            .search(&SearchRequest {
-                roles,
-                ..req("\"cargo test --lib\"")
-            })
-            .unwrap()
-    };
-    assert_eq!(
-        tool_only(vec![SearchRole::User, SearchRole::Assistant]).total_hits,
-        0
-    );
-    assert_eq!(tool_only(vec![SearchRole::ToolOutput]).total_hits, 0);
-    let r = tool_only(vec![SearchRole::ToolInput]);
+    // The Bash command only exists as a tool input, which is searched too.
+    let r = env.search("\"cargo test --lib\"");
     assert_eq!(r.total_hits, 1);
     let hit = &r.groups[0].hits[0];
     assert_eq!(hit.role, SearchRole::ToolInput);
@@ -279,29 +262,6 @@ fn project_role_time_and_live_filters() {
             .as_deref()
             .is_some_and(|t| t.starts_with("toolu_"))
     );
-
-    // Time range on the hit timestamp.
-    let none = env
-        .engine
-        .search(&SearchRequest {
-            time_range: Some(cv_core::model::TimeRange {
-                from_ms: Some(4.0e12),
-                to_ms: None,
-            }),
-            ..req("test")
-        })
-        .unwrap();
-    assert_eq!(none.total_hits, 0);
-
-    // Live set: only listed sessions.
-    let live_req = SearchRequest {
-        live_only: true,
-        ..req("test")
-    };
-    let r = fts::run_fts(&db, &live_req, &[ids::BRANCH.to_owned()]).unwrap();
-    assert_eq!(r.groups.len(), 1);
-    assert_eq!(r.groups[0].session.id, ids::BRANCH);
-    assert_eq!(fts::run_fts(&db, &live_req, &[]).unwrap().total_hits, 0);
 
     // Grouping limits: one session, one hit, totals still complete.
     let r = env
@@ -338,19 +298,6 @@ fn subagent_hit_carries_agent_and_jumps_into_scope() {
         .expect("hit inside the subagent file");
     assert!(hit.on_main_line);
     assert_eq!(hit.agent_type.as_deref(), Some("codex:codex-rescue"));
-    // The tool-output scan labels subagent hits the same way.
-    let scanned = scan_hits(&scan(&env, "\"veniam do adipiscing tempor aliqua\"", false));
-    let (_, out) = scanned
-        .iter()
-        .find(|(_, h)| h.agent_id.as_deref() == Some("a11b19d522e5e3835"))
-        .expect("tool output inside the subagent file");
-    assert_eq!(out.agent_type.as_deref(), Some("codex:codex-rescue"));
-    assert!(
-        scanned
-            .iter()
-            .filter(|(_, h)| h.agent_id.is_none())
-            .all(|(_, h)| h.agent_type.is_none())
-    );
     let t = env
         .engine
         .resolve_jump(&JumpRequest {
@@ -490,21 +437,14 @@ fn jump_maps_absorbed_results_and_flags_hidden() {
 fn ask_answers_are_user_hits_that_jump_to_the_call() {
     let env = indexed(&["basic"]);
     let ask = "toolu_0118zFb2snzn5S8uBwkUiEUn";
-    let r = env
-        .engine
-        .search(&SearchRequest {
-            roles: vec![SearchRole::User],
-            ..req("consectetur adipis")
-        })
-        .unwrap();
+    let r = env.search("consectetur adipis");
     let hits: Vec<_> = r
         .groups
         .iter()
         .flat_map(|g| &g.hits)
-        .filter(|h| h.tool_use_id.as_deref() == Some(ask))
+        .filter(|h| h.tool_use_id.as_deref() == Some(ask) && h.role == SearchRole::User)
         .collect();
     assert_eq!(hits.len(), 1);
-    assert_eq!(hits[0].role, SearchRole::User);
     let t = env
         .engine
         .resolve_jump(&JumpRequest {
@@ -579,127 +519,6 @@ fn backlog_commits_a_transaction_even_when_asked_to_yield() {
     let r = engine.search(&req("retry")).unwrap();
     assert!(r.index_complete && r.total_hits > 0);
     assert!(engine.index_status().text_ready);
-}
-
-// ------------------------------------------------------------------ tool-output scan
-
-fn scan(env: &Env, query: &str, cancel: bool) -> Vec<ToolOutputSearchEvent> {
-    let mut events = Vec::new();
-    env.engine
-        .search_tool_output(
-            &SearchRequest {
-                roles: vec![SearchRole::ToolOutput],
-                hits_per_session: 5,
-                ..req(query)
-            },
-            &AtomicBool::new(cancel),
-            &mut |e| events.push(e),
-        )
-        .unwrap();
-    events
-}
-
-fn scan_hits(events: &[ToolOutputSearchEvent]) -> Vec<(String, cv_core::model::SearchHit)> {
-    events
-        .iter()
-        .filter_map(|e| match e {
-            ToolOutputSearchEvent::Groups { groups } => Some(groups),
-            _ => None,
-        })
-        .flatten()
-        .flat_map(|g| g.hits.iter().map(|h| (g.session.id.clone(), h.clone())))
-        .collect()
-}
-
-#[test]
-fn tool_output_scan_finds_persisted_only_text() {
-    let env = indexed(&["persisted_and_images", "basic"]);
-    // Present only in tool-results/b8e6n2j5e.txt, not in any JSONL line.
-    let events = scan(&env, "08:00:59.463", false);
-    let hits = scan_hits(&events);
-    assert_eq!(hits.len(), 1, "{events:?}");
-    let (sid, hit) = &hits[0];
-    assert_eq!(sid, ids::PERSISTED);
-    assert_eq!(hit.role, SearchRole::ToolOutput);
-    assert_eq!(
-        hit.tool_use_id.as_deref(),
-        Some("toolu_01YSyvoRkw4Y1Uz3WMi4zHxr")
-    );
-    assert!(
-        hit.snippet
-            .iter()
-            .any(|p| p.hit && p.text == "08:00:59.463")
-    );
-    assert!(matches!(
-        events.last(),
-        Some(ToolOutputSearchEvent::Done {
-            cancelled: false,
-            ..
-        })
-    ));
-    assert!(events.iter().any(|e| matches!(
-        e,
-        ToolOutputSearchEvent::Progress { files_done, files_total } if files_done == files_total && *files_total > 0
-    )));
-    // The jump locates the tool call by its id.
-    let t = env
-        .engine
-        .resolve_jump(&JumpRequest {
-            session_id: ids::PERSISTED.to_owned(),
-            node_id: hit.node_id.clone(),
-            agent_id: None,
-            tool_use_id: hit.tool_use_id.clone(),
-        })
-        .unwrap();
-    assert_eq!(t.tool_use_id, hit.tool_use_id);
-    let tr = env
-        .engine
-        .get_transcript(&TranscriptRequest {
-            session_id: ids::PERSISTED.to_owned(),
-            scope: TranscriptScope::Main,
-            branch_choices: Vec::new(),
-            include_hidden: false,
-        })
-        .unwrap();
-    let node = tr
-        .nodes
-        .iter()
-        .find(|n| n.id == t.node_id)
-        .expect("display node");
-    let has_call = match &node.body {
-        cv_core::model::NodeBody::Assistant { blocks, .. } => blocks.iter().any(|b| {
-            matches!(b, cv_core::model::AssistantBlock::ToolCall(c) if Some(&c.tool_use_id) == hit.tool_use_id.as_ref())
-        }),
-        _ => false,
-    };
-    assert!(has_call, "the display node holds the tool call");
-
-    // Inline result text (decoded ANSI escapes), with an exclusion that removes it.
-    let hits = scan_hits(&scan(&env, "\"cannot find value\"", false));
-    assert_eq!(hits.len(), 1);
-    assert_eq!(hits[0].0, ids::BASIC);
-    assert_eq!(
-        hits[0].1.tool_use_id.as_deref(),
-        Some("toolu_e2ccd9f8e29e53a88b3896")
-    );
-    assert!(hits[0].1.on_main_line);
-    assert!(scan_hits(&scan(&env, "\"cannot find value\" -attempts", false)).is_empty());
-    // Not indexed by the default search.
-    assert_eq!(env.search("\"cannot find value\"").total_hits, 0);
-}
-
-#[test]
-fn tool_output_scan_cancel_stops_it() {
-    let env = indexed(&["persisted_and_images", "basic"]);
-    let events = scan(&env, "08:00:59.463", true);
-    assert!(scan_hits(&events).is_empty());
-    assert!(matches!(
-        events.last(),
-        Some(ToolOutputSearchEvent::Done {
-            cancelled: true,
-            ..
-        })
-    ));
 }
 
 // ------------------------------------------------------------------ ⌘F
@@ -818,26 +637,6 @@ fn measure_real_root() {
             r.mode, best, r.total_hits, r.total_sessions
         );
     }
-    let t = std::time::Instant::now();
-    let mut groups = 0;
-    engine
-        .search_tool_output(
-            &SearchRequest {
-                roles: vec![SearchRole::ToolOutput],
-                ..req("panicked at")
-            },
-            &AtomicBool::new(false),
-            &mut |e| {
-                if let ToolOutputSearchEvent::Groups { groups: g } = e {
-                    groups += g.len();
-                }
-            },
-        )
-        .unwrap();
-    println!(
-        "tool-output scan \"panicked at\": {:.2}s, {groups} group events",
-        t.elapsed().as_secs_f64()
-    );
 }
 
 fn dirs_home() -> PathBuf {

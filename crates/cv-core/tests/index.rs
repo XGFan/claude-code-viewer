@@ -454,18 +454,6 @@ fn engine_lists_projects_sessions_and_detail() {
         ..SessionQuery::default()
     };
     assert!(env.engine.list_sessions(&other).unwrap().is_empty());
-    let live_only = SessionQuery {
-        live_only: true,
-        ..SessionQuery::default()
-    };
-    // Fixture copies may carry a fresh mtime (recent-write fallback); only check the filter holds.
-    assert!(
-        env.engine
-            .list_sessions(&live_only)
-            .unwrap()
-            .iter()
-            .all(|s| s.live.is_some())
-    );
 
     let detail = env.engine.get_session(ids::FORK_ORIGIN).unwrap();
     assert_eq!(

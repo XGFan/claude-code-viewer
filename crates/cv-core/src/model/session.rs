@@ -13,7 +13,6 @@ pub struct ProjectSummary {
     /// The project directory no longer exists on disk.
     pub missing: bool,
     pub session_count: u32,
-    pub live_count: u32,
     #[specta(type = Number)]
     pub last_active_ms: f64,
 }
@@ -31,7 +30,7 @@ pub enum SessionSort {
     Cost,
 }
 
-/// Stats drill-down filter; days and week-hours are bucketed in local time.
+/// Stats drill-down filter; days are local calendar days.
 #[derive(Serialize, Deserialize, Type, Clone, Debug, PartialEq)]
 #[serde(
     tag = "kind",
@@ -42,11 +41,6 @@ pub enum Drill {
     /// `day` is `YYYY-MM-DD`.
     Day {
         day: String,
-    },
-    /// `weekday` 0 = Monday.
-    WeekHour {
-        weekday: u32,
-        hour: u32,
     },
     Model {
         model: String,
@@ -67,7 +61,6 @@ pub struct SessionQuery {
     pub project_ids: Vec<ProjectId>,
     pub sort: SessionSort,
     pub descending: bool,
-    pub live_only: bool,
     pub time_range: Option<TimeRange>,
     pub drill: Option<Drill>,
 }

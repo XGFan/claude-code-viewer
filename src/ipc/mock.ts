@@ -28,7 +28,6 @@ import type {
   StatsRequest,
   ToolCall,
   ToolDetail,
-  ToolOutputSearchEvent,
   Transcript,
   TranscriptRequest,
   TranscriptScope,
@@ -69,10 +68,10 @@ declare global {
 
 const appError = (code: AppError["code"], message: string): AppError => ({ code, message });
 
-function localParts(ms: number) {
+/** Local calendar day `YYYY-MM-DD`. */
+function localDay(ms: number): string {
   const d = new Date(ms);
-  const day = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-  return { day, weekday: (d.getDay() + 6) % 7, hour: d.getHours() };
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 }
 
 // ---- search documents -------------------------------------------------------------------------
@@ -108,7 +107,6 @@ function docsOf(sessionId: string, nodes: Node[], agentId: string | null, onMain
         if (blk.kind === "text" || blk.kind === "thinking") push(n, "assistant", blk.text);
         else if (blk.kind === "toolCall") {
           push(n, "toolInput", blk.inputJson, blk.toolUseId);
-          if (blk.result) push(n, "toolOutput", blk.result.text, blk.toolUseId);
           const ask = blk.result?.extraJson ? (JSON.parse(blk.result.extraJson) as AskExtra) : null;
           if (ask?.questions && ask.answers) {
             const notes = Object.values(ask.annotations ?? {}).map((a) => a.notes ?? "");
@@ -271,19 +269,14 @@ function snippet(text: string, terms: string[]): SnippetPart[] {
   return parts;
 }
 
-function searchGroups(req: SearchRequest, roles: SearchRole[]): SearchGroup[] {
+function searchGroups(req: SearchRequest): SearchGroup[] {
   const { include, exclude } = parseQuery(req.query);
   if (include.length === 0) return [];
   const bySession = new Map<string, SearchHit[]>();
   for (const doc of allDocs()) {
-    if (doc.hidden || !roles.includes(doc.role)) continue;
+    if (doc.hidden || !DEFAULT_ROLES.includes(doc.role)) continue;
     const s = summaryOf(doc.sessionId);
     if (req.projectId && !relatedProjects(s).includes(req.projectId)) continue;
-    if (req.liveOnly && !s.live) continue;
-    if (req.timeRange) {
-      if (req.timeRange.fromMs != null && s.lastActiveMs < req.timeRange.fromMs) continue;
-      if (req.timeRange.toMs != null && s.lastActiveMs > req.timeRange.toMs) continue;
-    }
     const lower = doc.text.toLowerCase();
     if (!include.every((t) => lower.includes(t)) || exclude.some((t) => lower.includes(t))) continue;
     const hits = bySession.get(doc.sessionId) ?? [];
@@ -305,10 +298,8 @@ function searchGroups(req: SearchRequest, roles: SearchRole[]): SearchGroup[] {
     .slice(0, req.maxSessions || 50);
 }
 
+/** Searched roles: tool output is not indexed (ADR-0004). */
 const DEFAULT_ROLES: SearchRole[] = ["user", "assistant", "toolInput"];
-let nextSearchId = 1;
-const cancelled = new Set<number>();
-const running = new Set<number>();
 
 // ---- misc ---------------------------------------------------------------------------------------
 
@@ -373,7 +364,6 @@ function relatedProjects(s: SessionSummary): string[] {
 function listSessions(q: SessionQuery): SessionSummary[] {
   let rows = sessionData.map((d) => ({ d, s: summaryOf(d.summary.id) }));
   if (q.projectIds.length) rows = rows.filter(({ s }) => relatedProjects(s).some((p) => q.projectIds.includes(p)));
-  if (q.liveOnly) rows = rows.filter(({ s }) => s.live);
   if (q.timeRange) {
     const { fromMs, toMs } = q.timeRange;
     rows = rows.filter(({ s }) => (fromMs == null || s.lastActiveMs >= fromMs) && (toMs == null || s.lastActiveMs <= toMs));
@@ -383,11 +373,7 @@ function listSessions(q: SessionQuery): SessionSummary[] {
     rows = rows.filter(({ s }) => {
       switch (drill.kind) {
         case "day":
-          return localParts(s.lastActiveMs).day === drill.day;
-        case "weekHour": {
-          const p = localParts(s.lastActiveMs);
-          return p.weekday === drill.weekday && p.hour === drill.hour;
-        }
+          return localDay(s.lastActiveMs) === drill.day;
         case "model":
           return s.primaryModel === drill.model;
         case "span":
@@ -603,7 +589,7 @@ export function createMockApi(): Api {
     search: (req) =>
       later((): SearchResponse => {
         calls.push({ method: "search", args: [req.query, req.projectId] });
-        const groups = searchGroups({ ...req, maxSessions: req.maxSessions || 50 }, req.roles.length ? req.roles : DEFAULT_ROLES);
+        const groups = searchGroups({ ...req, maxSessions: req.maxSessions || 50 });
         return {
           groups,
           totalSessions: groups.length,
@@ -612,36 +598,6 @@ export function createMockApi(): Api {
           elapsedMs: 12,
           indexComplete: currentIndexStatus.textReady,
         };
-      }),
-    searchToolOutput(req, onEvent) {
-      const searchId = nextSearchId++;
-      const total = 40;
-      const groups = searchGroups(req, ["toolOutput"]);
-      let done = 0;
-      running.add(searchId);
-      const timer = setInterval(() => {
-        if (cancelled.has(searchId)) {
-          clearInterval(timer);
-          cancelled.delete(searchId);
-          running.delete(searchId);
-          onEvent({ kind: "done", elapsedMs: done * 40, cancelled: true } satisfies ToolOutputSearchEvent);
-          return;
-        }
-        done += 10;
-        onEvent({ kind: "progress", filesDone: done, filesTotal: total });
-        if (done === 20 && groups.length) onEvent({ kind: "groups", groups: structuredClone(groups) });
-        if (done >= total) {
-          clearInterval(timer);
-          running.delete(searchId);
-          onEvent({ kind: "done", elapsedMs: done * 40, cancelled: false });
-        }
-      }, 40);
-      return later(() => ({ searchId }));
-    },
-    cancelSearch: (searchId) =>
-      later(() => {
-        if (running.has(searchId)) cancelled.add(searchId);
-        return null;
       }),
     resolveJump: (req) => later(() => resolveJump(req)),
     findInSession: (req) =>

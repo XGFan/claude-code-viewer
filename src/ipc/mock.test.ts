@@ -9,7 +9,7 @@ beforeAll(async () => {
   api = (await import("./mock")).createMockApi();
 });
 
-const base: SessionQuery = { projectIds: [], sort: "lastActive", descending: true, liveOnly: false, timeRange: null, drill: null };
+const base: SessionQuery = { projectIds: [], sort: "lastActive", descending: true, timeRange: null, drill: null };
 
 describe("mock list_sessions", () => {
   it("按 lastActive 倒序，且覆盖 ≥8 个会话", async () => {
@@ -19,15 +19,13 @@ describe("mock list_sessions", () => {
     expect(times).toEqual([...times].sort((a, b) => b - a));
   });
 
-  it("按项目与 liveOnly 过滤，升序排序", async () => {
+  it("按项目过滤，升序排序", async () => {
     const projects = await api.listProjects();
     const orbit = projects.find((p) => p.displayName === "orbit-web")!;
     const rows = await api.listSessions({ ...base, projectIds: [orbit.id], sort: "messages", descending: false });
     expect(rows.every((r) => r.projectId === orbit.id)).toBe(true);
     const counts = rows.map((r) => r.messageCount);
     expect(counts).toEqual([...counts].sort((a, b) => a - b));
-    const live = await api.listSessions({ ...base, liveOnly: true });
-    expect(live.map((r) => r.live?.status).sort()).toEqual(["busy", "idle"]);
   });
 
   it("get_transcript 支持分支选择与隐藏项", async () => {

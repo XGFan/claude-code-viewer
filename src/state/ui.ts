@@ -2,8 +2,6 @@ import { create } from "zustand";
 import type { BranchChoice, Drill, JumpTarget, SessionSort, TimeRange, TranscriptScope } from "@/ipc/bindings";
 import type { WeeklyReset } from "@/lib/cycle";
 
-export type View = "sessions" | "diagnostics";
-
 export type CollapsiblePane = "sessions";
 
 const COLLAPSED_KEY = "cv.collapsedPanes";
@@ -47,7 +45,6 @@ const sessionDefaults = {
 };
 
 interface UiState {
-  view: View;
   /** Session list filter; empty = all projects (matches `SessionQuery.projectIds`). */
   projectIds: string[];
   sessionId: string | null;
@@ -75,7 +72,6 @@ interface UiState {
   /** When the stats page's weekly cycle starts over; remembered across launches. */
   weeklyReset: WeeklyReset;
 
-  setView: (view: View) => void;
   setProjectIds: (ids: string[]) => void;
   /** Switches session (resetting per-session state); a no-op when the id is unchanged. */
   selectSession: (id: string | null) => void;
@@ -103,7 +99,6 @@ interface UiState {
 }
 
 export const useUi = create<UiState>()((set) => ({
-  view: "sessions",
   projectIds: [],
   sessionId: null,
   ...sessionDefaults,
@@ -118,7 +113,6 @@ export const useUi = create<UiState>()((set) => ({
   collapsed: load(COLLAPSED_KEY, { sessions: false }),
   weeklyReset: load(WEEKLY_RESET_KEY, { weekday: 0, minutes: 0 }),
 
-  setView: (view) => set({ view }),
   setProjectIds: (projectIds) => set({ projectIds }),
   selectSession: (id) => set((s) => (s.sessionId === id ? s : { sessionId: id, ...sessionDefaults })),
   setBranchChoice: (choice) =>
@@ -134,7 +128,6 @@ export const useUi = create<UiState>()((set) => ({
   setFindIndex: (findIndex) => set({ findIndex }),
   jumpTo: (target) =>
     set((s) => ({
-      view: "sessions",
       pendingJump: target,
       ...(s.sessionId === target.sessionId ? {} : { sessionId: target.sessionId, ...sessionDefaults }),
     })),

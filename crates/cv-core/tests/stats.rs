@@ -8,7 +8,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use chrono::{DateTime, Datelike, FixedOffset, Local, NaiveDateTime, TimeZone, Timelike};
+use chrono::{DateTime, FixedOffset, Local, NaiveDateTime, TimeZone};
 use common::{copy_dir_all, fixture_dir, ids};
 use cv_core::model::{
     DataRootSource, Drill, SessionQuery, SessionSort, Stats, StatsRequest, TimeRange,
@@ -334,14 +334,11 @@ fn totals_match_oracle() {
     assert_eq!(st.overview.output_tokens, out as f64);
     assert_eq!(st.daily.iter().map(|d| d.output).sum::<f64>(), out as f64);
 
-    // Local-day heatmap and week×hour from chrono::Local.
+    // Local-day heatmap from chrono::Local.
     let mut days: BTreeMap<String, u32> = BTreeMap::new();
-    let mut wh: BTreeMap<(u32, u32), u32> = BTreeMap::new();
     for (_, m) in &main {
         let t = local(m.ts);
         *days.entry(t.date().to_string()).or_default() += 1;
-        *wh.entry((t.weekday().num_days_from_monday(), t.hour()))
-            .or_default() += 1;
     }
     let got: BTreeMap<String, u32> = st
         .heat_daily
@@ -350,12 +347,6 @@ fn totals_match_oracle() {
         .collect();
     assert_eq!(got, days);
     assert_eq!(st.overview.active_days as usize, days.len());
-    let got: BTreeMap<(u32, u32), u32> = st
-        .heat_week_hour
-        .iter()
-        .map(|c| ((c.weekday, c.hour), c.messages))
-        .collect();
-    assert_eq!(got, wh);
 
     // Daily tokens by (local day, model).
     let mut daily: BTreeMap<(String, String), [i64; 4]> = BTreeMap::new();
@@ -512,19 +503,6 @@ fn drill_down_returns_exactly_the_contributing_sessions() {
             "day {}",
             d.day
         );
-    }
-    for c in &st.heat_week_hour {
-        let want = set(&|s| {
-            s.msgs.iter().any(|m| {
-                let t = local(m.ts);
-                m.main && t.weekday().num_days_from_monday() == c.weekday && t.hour() == c.hour
-            })
-        });
-        let drill = Drill::WeekHour {
-            weekday: c.weekday,
-            hour: c.hour,
-        };
-        assert_eq!(drill_ids(&env, drill, None), want);
     }
     let models: BTreeSet<&String> = st.daily.iter().map(|d| &d.model).collect();
     assert!(models.len() >= 2);

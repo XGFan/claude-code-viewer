@@ -11,7 +11,6 @@ import type {
   JumpTarget,
   LiveChanged,
   ProjectSummary,
-  SearchHandle,
   SearchRequest,
   SearchResponse,
   SessionDetail,
@@ -22,7 +21,6 @@ import type {
   StatsRequest,
   ToolDetail,
   ToolDetailRequest,
-  ToolOutputSearchEvent,
   Transcript,
   TranscriptRequest,
 } from "./bindings";
@@ -42,9 +40,6 @@ export interface Api {
   getToolDetail(req: ToolDetailRequest): Promise<ToolDetail>;
   getImage(req: ImageRequest): Promise<ImageData>;
   search(req: SearchRequest): Promise<SearchResponse>;
-  /** Events arrive on `onEvent` until `done`/`error`; the returned handle feeds `cancelSearch`. */
-  searchToolOutput(req: SearchRequest, onEvent: (event: ToolOutputSearchEvent) => void): Promise<SearchHandle>;
-  cancelSearch(searchId: number): Promise<null>;
   resolveJump(req: JumpRequest): Promise<JumpTarget>;
   findInSession(req: FindRequest): Promise<FindResult>;
   revealSessionFile(sessionId: string, agentId: string | null): Promise<null>;

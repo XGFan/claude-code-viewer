@@ -1,10 +1,10 @@
-//! Stats panel aggregation (local-time buckets: days, week×hours, activity bars; A13).
+//! Stats panel aggregation (local-time buckets: days and activity bars; A13).
 //!
 //! Semantics (each chart dimension has a [`Drill`](crate::model::Drill) in `index::reader` that
 //! returns exactly the contributing sessions):
 //! - Scope: non-empty sessions; the time range applies to each message's own timestamp
 //!   (`messages.ts_ms`), both bounds inclusive.
-//! - `overview.messages`, `heat_daily`, `heat_week_hour`, `overview.sessions`,
+//! - `overview.messages`, `heat_daily`, `overview.sessions`,
 //!   `overview.active_days` and the ranked sessions' `messages`: main-file messages only
 //!   (human/command prompts + assistant messages by `message.id`, as `message_count`).
 //! - Tokens (`overview.output_tokens`, `daily`, session `output_tokens`) and cost
@@ -25,7 +25,7 @@ use crate::error::CoreResult;
 use crate::index::schema::MSG_ASSISTANT;
 use crate::model::{
     Activity, ActivityBar, ActivityBucket, DailyModelTokens, DayCount, SessionStat, Stats,
-    StatsOverview, StatsRequest, TimeRange, WeekHourCount,
+    StatsOverview, StatsRequest, TimeRange,
 };
 
 /// Label of messages without a model and Subagent Runs without an `agentType`
@@ -79,7 +79,6 @@ pub fn compute(conn: &Connection, r: &StatsRequest) -> CoreResult<Stats> {
     let mut heat_daily: BTreeMap<NaiveDate, u32> = BTreeMap::new();
     // Main-file messages per local hour, the unit the activity bars are summed from.
     let mut hourly: BTreeMap<NaiveDateTime, u32> = BTreeMap::new();
-    let mut week_hour = [[0u32; 24]; 7];
     let mut daily: BTreeMap<(NaiveDate, String), [f64; 4]> = BTreeMap::new();
     {
         let mut sql = "SELECT session_id, agent_id = '', ts_ms, role, model, in_tok, out_tok,
@@ -105,7 +104,6 @@ pub fn compute(conn: &Connection, r: &StatsRequest) -> CoreResult<Stats> {
                 sess_messages[si] += 1;
                 messages += 1;
                 *heat_daily.entry(day).or_default() += 1;
-                week_hour[t.weekday().num_days_from_monday() as usize][t.hour() as usize] += 1;
                 *hourly.entry(floor(ActivityBucket::Hour1, t)).or_default() += 1;
             }
             let tok: [f64; 4] = [
@@ -187,17 +185,6 @@ pub fn compute(conn: &Connection, r: &StatsRequest) -> CoreResult<Stats> {
             })
             .collect(),
         activity: activity(&hourly, r.time_range.as_ref()),
-        heat_week_hour: (0..7u32)
-            .flat_map(|w| (0..24u32).map(move |h| (w, h)))
-            .filter_map(|(weekday, hour)| {
-                let messages = week_hour[weekday as usize][hour as usize];
-                (messages > 0).then_some(WeekHourCount {
-                    weekday,
-                    hour,
-                    messages,
-                })
-            })
-            .collect(),
         sessions: top,
     })
 }

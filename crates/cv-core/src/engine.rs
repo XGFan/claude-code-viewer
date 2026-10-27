@@ -40,7 +40,7 @@ use crate::model::{
     ImageRequest, IndexPhase, IndexStatus, JumpRequest, JumpTarget, LiveChanged, LiveEntry,
     LiveState, ProjectSummary, SearchRequest, SearchResponse, SessionDetail, SessionQuery,
     SessionSummary, SourceFile, Stats, StatsRequest, TokenTotals, ToolDetail, ToolDetailRequest,
-    ToolOutputSearchEvent, Transcript, TranscriptRequest, TranscriptScope,
+    Transcript, TranscriptRequest, TranscriptScope,
 };
 use crate::parse::{ParsedChunk, parse_bytes};
 use crate::paths::{index_db_path, prices_cache_path, sessions_dir};
@@ -280,27 +280,12 @@ impl Engine {
     }
 
     pub fn list_projects(&self) -> CoreResult<Vec<ProjectSummary>> {
-        let live = self.live_map()?;
-        let ids: Vec<String> = live.keys().cloned().collect();
-        self.index.read(|c| {
-            let mut projects = reader::list_projects(c)?;
-            let mut counts: HashMap<String, u32> = HashMap::new();
-            for p in reader::session_projects(c, &ids)? {
-                *counts.entry(p).or_default() += 1;
-            }
-            for p in &mut projects {
-                p.live_count = counts.get(&p.id).copied().unwrap_or(0);
-            }
-            Ok(projects)
-        })
+        self.index.read(reader::list_projects)
     }
 
     pub fn list_sessions(&self, q: &SessionQuery) -> CoreResult<Vec<SessionSummary>> {
         let live = self.live_map()?;
         let mut rows = self.index.read(|c| reader::list_sessions(c, q))?;
-        if q.live_only {
-            rows.retain(|s| live.contains_key(&s.id));
-        }
         for s in &mut rows {
             s.live = live.get(&s.id).cloned();
         }
@@ -386,75 +371,11 @@ impl Engine {
 
     pub fn search(&self, r: &SearchRequest) -> CoreResult<SearchResponse> {
         let live = self.live_map()?;
-        let ids: Vec<String> = live.keys().cloned().collect();
-        let mut resp = self.index.read(|c| search::run_fts(c, r, &ids))?;
+        let mut resp = self.index.read(|c| search::run_fts(c, r))?;
         for g in &mut resp.groups {
             g.session.live = live.get(&g.session.id).cloned();
         }
         Ok(resp)
-    }
-
-    /// Streams tool-output hits into `sink` until done or `cancel` is set. Targets are the
-    /// transcript files and persisted outputs of the sessions matching the request filters.
-    pub fn search_tool_output(
-        &self,
-        r: &SearchRequest,
-        cancel: &AtomicBool,
-        sink: &mut dyn FnMut(ToolOutputSearchEvent),
-    ) -> CoreResult<()> {
-        let q = search::parse_query(&r.query)?;
-        let sessions = self.list_sessions(&SessionQuery {
-            project_ids: r.project_id.iter().cloned().collect(),
-            live_only: r.live_only,
-            time_range: r.time_range.clone(),
-            ..SessionQuery::default()
-        })?;
-        let targets = self.index.read(|c| {
-            let mut out = Vec::new();
-            for s in &sessions {
-                let files = reader::session_files(c, &s.id)?;
-                let session_dir = files
-                    .iter()
-                    .find(|f| f.role == FileRole::Main)
-                    .and_then(|f| Path::new(&f.path).parent().map(|d| d.join(&s.id)));
-                for f in &files {
-                    out.push(search::ScanTarget {
-                        session_id: s.id.clone(),
-                        agent_id: f.agent_id.clone(),
-                        path: PathBuf::from(&f.path),
-                        kind: search::ScanTargetKind::Jsonl,
-                        tool_use_id: None,
-                    });
-                }
-                let Some(dir) = session_dir else { continue };
-                let mut st = c.prepare_cached(
-                    "SELECT file_name, agent_id, tool_use_id FROM persisted_outputs
-                     WHERE session_id=?1",
-                )?;
-                let rows = st.query_map([&s.id], |row| {
-                    Ok((
-                        row.get::<_, String>(0)?,
-                        row.get::<_, Option<String>>(1)?,
-                        row.get::<_, String>(2)?,
-                    ))
-                })?;
-                for row in rows {
-                    let (name, agent_id, tool_use_id) = row?;
-                    let Some(path) = assemble::content::persisted_path(&dir, &name) else {
-                        continue;
-                    };
-                    out.push(search::ScanTarget {
-                        session_id: s.id.clone(),
-                        agent_id,
-                        path,
-                        kind: search::ScanTargetKind::PersistedOutput,
-                        tool_use_id: Some(tool_use_id),
-                    });
-                }
-            }
-            Ok(out)
-        })?;
-        search::run_tool_output_scan(targets, &sessions, r, &q, cancel, sink)
     }
 
     pub fn stats(&self, r: &StatsRequest) -> CoreResult<Stats> {

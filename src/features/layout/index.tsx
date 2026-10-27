@@ -41,10 +41,10 @@ function useFullScreen(): boolean {
   return useSyncExternalStore(subscribeFullScreen, () => fullScreen);
 }
 
-/** The session list column is hidden by the user, or because the Subagent panel / diagnostics take its place. */
+/** The session list column is hidden by the user, or because the Subagent panel takes its place. */
 export function useSessionsHidden(): { hidden: boolean; forced: boolean } {
   const collapsed = useUi((s) => s.collapsed.sessions);
-  const forced = useUi((s) => s.view !== "sessions" || (s.sessionId != null && s.panelStack.length > 0));
+  const forced = useUi((s) => s.sessionId != null && s.panelStack.length > 0);
   return { hidden: forced || collapsed, forced };
 }
 

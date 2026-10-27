@@ -2,7 +2,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use chrono::{Datelike, Local, NaiveDate, TimeZone, Timelike};
+use chrono::{Local, NaiveDate, TimeZone};
 use rusqlite::types::Value;
 use rusqlite::{Connection, OptionalExtension, Row, params, params_from_iter};
 
@@ -88,7 +88,7 @@ pub fn main_mtimes(conn: &Connection, since_ms: f64) -> CoreResult<Vec<(String, 
 }
 
 /// Projects with at least one non-empty session started in or editing them, most recently active
-/// first. `live_count` is filled by the engine.
+/// first.
 pub fn list_projects(conn: &Connection) -> CoreResult<Vec<ProjectSummary>> {
     let mut st = conn.prepare(
         "WITH rel AS (SELECT id AS session_id, project_id FROM sessions
@@ -105,27 +105,10 @@ pub fn list_projects(conn: &Connection) -> CoreResult<Vec<ProjectSummary>> {
             display_name: r.get(2)?,
             missing: r.get(3)?,
             session_count: r.get(4)?,
-            live_count: 0,
             last_active_ms: r.get::<_, i64>(5)? as f64,
         })
     })?;
     Ok(rows.collect::<Result<_, _>>()?)
-}
-
-/// Projects the given non-empty sessions started in or edited (each Project once per session).
-pub fn session_projects(conn: &Connection, ids: &[String]) -> CoreResult<Vec<String>> {
-    let mut st = conn.prepare_cached(
-        "SELECT project_id FROM sessions WHERE id=?1 AND is_empty=0
-         UNION SELECT sp.project_id FROM session_projects sp JOIN sessions s
-            ON s.id = sp.session_id AND s.is_empty = 0 WHERE sp.session_id=?1",
-    )?;
-    let mut out = Vec::new();
-    for id in ids {
-        for p in st.query_map([id], |r| r.get::<_, String>(0))? {
-            out.push(p?);
-        }
-    }
-    Ok(out)
 }
 
 /// Origin of a session: `forkedFrom`, else the latest earlier session sharing its `root_uuid`
@@ -206,7 +189,7 @@ pub fn project_match(ids: &[String], args: &mut Vec<Value>) -> String {
 ///
 /// Without a drill, the time range keeps sessions whose span overlaps it. With a drill, the
 /// session must have a contributing row inside the range, mirroring `stats::compute` exactly:
-/// - `Day` / `WeekHour`: a main-file message at that local day / weekday×hour;
+/// - `Day`: a main-file message on that local day;
 /// - `Model`: a main or Subagent message of that model that carries tokens;
 /// - `Span`: a main-file message in `[from_ms, to_ms)` (an activity bar).
 pub fn list_sessions(conn: &Connection, q: &SessionQuery) -> CoreResult<Vec<SessionSummary>> {
@@ -239,7 +222,6 @@ pub fn list_sessions(conn: &Connection, q: &SessionQuery) -> CoreResult<Vec<Sess
             args.push(Value::Integer(to as i64));
         }
     }
-    let mut week_hour = None;
     match &q.drill {
         Some(Drill::Day { day }) => match local_day_bounds_ms(day) {
             Some((start, end)) => {
@@ -272,7 +254,6 @@ pub fn list_sessions(conn: &Connection, q: &SessionQuery) -> CoreResult<Vec<Sess
                     AND (m.in_tok > 0 OR m.out_tok > 0 OR m.cr_tok > 0 OR m.cc_tok > 0){range})"
             ));
         }
-        Some(Drill::WeekHour { weekday, hour }) => week_hour = Some((*weekday, *hour)),
         None => {}
     }
     let col = match q.sort {
@@ -289,12 +270,7 @@ pub fn list_sessions(conn: &Connection, q: &SessionQuery) -> CoreResult<Vec<Sess
     );
     let mut st = conn.prepare(&sql)?;
     let rows = st.query_map(params_from_iter(args), summary_from_row)?;
-    let mut out: Vec<SessionSummary> = rows.collect::<Result<_, _>>()?;
-    if let Some((weekday, hour)) = week_hour {
-        let keep = sessions_in_week_hour(conn, weekday, hour, from, to)?;
-        out.retain(|s| keep.contains(&s.id));
-    }
-    Ok(out)
+    Ok(rows.collect::<Result<_, _>>()?)
 }
 
 /// `[start, end)` of a local calendar day (`YYYY-MM-DD`) in unix ms.
@@ -308,30 +284,6 @@ fn local_day_bounds_ms(day: &str) -> Option<(i64, i64)> {
         .from_local_datetime(&next.and_hms_opt(0, 0, 0)?)
         .earliest()?;
     Some((start.timestamp_millis(), end.timestamp_millis()))
-}
-
-/// Sessions with a main-file message in `[from, to]` at local `weekday` (0 = Monday) and `hour`.
-fn sessions_in_week_hour(
-    conn: &Connection,
-    weekday: u32,
-    hour: u32,
-    from: i64,
-    to: i64,
-) -> CoreResult<HashSet<String>> {
-    let mut st = conn.prepare(
-        "SELECT session_id, ts_ms FROM messages WHERE agent_id = '' AND ts_ms >= ?1 AND ts_ms <= ?2",
-    )?;
-    let mut rows = st.query([from, to])?;
-    let mut out = HashSet::new();
-    while let Some(r) = rows.next()? {
-        let Some(t) = stats::local_time(r.get(1)?) else {
-            continue;
-        };
-        if t.weekday().num_days_from_monday() == weekday && t.hour() == hour {
-            out.insert(r.get::<_, String>(0)?);
-        }
-    }
-    Ok(out)
 }
 
 /// Extra columns of `get_session`.

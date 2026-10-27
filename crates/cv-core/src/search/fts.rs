@@ -30,22 +30,13 @@ const SNIPPET_TOKENS: u32 = 64;
 const DEFAULT_MAX_SESSIONS: u32 = 50;
 const DEFAULT_HITS_PER_SESSION: u32 = 5;
 
-/// `live` is the current Live Session id set (for `live_only`).
-pub fn run_fts(
-    conn: &Connection,
-    r: &SearchRequest,
-    live: &[String],
-) -> CoreResult<SearchResponse> {
-    run(conn, r, live, false)
+/// Searches user input, Claude replies and tool input (tool output is not indexed, ADR-0004).
+pub fn run_fts(conn: &Connection, r: &SearchRequest) -> CoreResult<SearchResponse> {
+    run(conn, r, false)
 }
 
 /// [`run_fts`]; `force_like` evaluates every term with the LIKE fallback (tests compare modes).
-pub fn run(
-    conn: &Connection,
-    r: &SearchRequest,
-    live: &[String],
-    force_like: bool,
-) -> CoreResult<SearchResponse> {
+pub fn run(conn: &Connection, r: &SearchRequest, force_like: bool) -> CoreResult<SearchResponse> {
     let started = Instant::now();
     let q = parse_query(&r.query)?;
     let fts = |t: &&String| !force_like && is_fts_term(t);
@@ -70,19 +61,6 @@ pub fn run(
         elapsed_ms: 0.0,
         index_complete: reader::text_ready(conn)?,
     };
-    let roles: Vec<i64> = if r.roles.is_empty() {
-        vec![0, 1, 2]
-    } else {
-        r.roles
-            .iter()
-            .filter_map(|role| role_to_db(*role))
-            .collect()
-    };
-    if roles.is_empty() || (r.live_only && live.is_empty()) {
-        resp.elapsed_ms = started.elapsed().as_secs_f64() * 1e3;
-        return Ok(resp);
-    }
-
     let mut args: Vec<Value> = Vec::new();
     let mut conds: Vec<String> = Vec::new();
     let match_expr = (!fts_inc.is_empty()).then(|| {
@@ -117,24 +95,8 @@ pub fn run(
         conds.push("instr(lower(t.body), lower(?)) = 0".into());
         args.push(Value::Text((*t).clone()));
     }
-    conds.push(format!("t.role IN ({})", marks(roles.len())));
-    args.extend(roles.into_iter().map(Value::Integer));
-    if let Some(tr) = &r.time_range {
-        if let Some(from) = tr.from_ms {
-            conds.push("t.ts_ms >= ?".into());
-            args.push(Value::Integer(from as i64));
-        }
-        if let Some(to) = tr.to_ms {
-            conds.push("t.ts_ms <= ?".into());
-            args.push(Value::Integer(to as i64));
-        }
-    }
     if let Some(p) = &r.project_id {
         conds.push(reader::project_match(std::slice::from_ref(p), &mut args));
-    }
-    if r.live_only {
-        conds.push(format!("t.session_id IN ({})", marks(live.len())));
-        args.extend(live.iter().cloned().map(Value::Text));
     }
     let max_sessions = nonzero(r.max_sessions, DEFAULT_MAX_SESSIONS);
     let per_session = nonzero(r.hits_per_session, DEFAULT_HITS_PER_SESSION);
@@ -252,21 +214,8 @@ pub fn run(
     Ok(resp)
 }
 
-fn marks(n: usize) -> String {
-    vec!["?"; n].join(",")
-}
-
 fn nonzero(v: u32, default: u32) -> u32 {
     if v == 0 { default } else { v }
-}
-
-fn role_to_db(r: SearchRole) -> Option<i64> {
-    match r {
-        SearchRole::User => Some(0),
-        SearchRole::Assistant => Some(1),
-        SearchRole::ToolInput => Some(2),
-        SearchRole::ToolOutput => None,
-    }
 }
 
 fn role_from_db(v: i64) -> SearchRole {

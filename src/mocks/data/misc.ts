@@ -75,11 +75,6 @@ export const stats = {
   heatDaily: Array.from({ length: 90 }, (_, i) => ({ day: localDay(NOW - (89 - i) * DAY), messages: Math.round(rnd(i + 7) * 80) })),
   // Filled per request by `getStats`.
   activity: { bucket: "day", bars: [] },
-  heatWeekHour: Array.from({ length: 7 * 24 }, (_, i) => ({
-    weekday: Math.floor(i / 24),
-    hour: i % 24,
-    messages: i % 24 >= 9 && i % 24 <= 22 ? Math.round(rnd(i + 11) * 60) : Math.round(rnd(i + 11) * 5),
-  })),
   // Filled from the mock sessions by `getStats`.
   sessions: [],
 } satisfies Stats;

@@ -21,7 +21,6 @@ function scopeFromTarget(target: Element | null): TranscriptScope {
 export function FindBar() {
   const open = useUi((s) => s.findOpen);
   const sessionId = useUi((s) => s.sessionId);
-  const view = useUi((s) => s.view);
   const query = useUi((s) => s.findQuery);
   const index = useUi((s) => s.findIndex);
   const showHidden = useUi((s) => s.showHidden);
@@ -45,7 +44,7 @@ export function FindBar() {
     return () => window.removeEventListener("pointerdown", onDown, true);
   }, []);
 
-  const canFind = view === "sessions" && sessionId != null;
+  const canFind = sessionId != null;
   useHotkey(
     "Meta+f",
     () => {

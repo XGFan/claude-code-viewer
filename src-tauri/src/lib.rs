@@ -29,8 +29,6 @@ pub fn specta_builder() -> Builder<tauri::Wry> {
             commands::get_tool_detail,
             commands::get_image,
             commands::search,
-            commands::search_tool_output,
-            commands::cancel_search,
             commands::resolve_jump,
             commands::find_in_session,
             commands::reveal_session_file,

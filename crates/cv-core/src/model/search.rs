@@ -2,9 +2,7 @@ use serde::{Deserialize, Serialize};
 use specta::Type;
 use specta_typescript::Number;
 
-use super::common::{
-    AgentId, BranchChoice, NodeId, ProjectId, SessionId, TimeRange, TranscriptScope,
-};
+use super::common::{AgentId, BranchChoice, NodeId, ProjectId, SessionId, TranscriptScope};
 use super::session::SessionSummary;
 
 #[derive(Serialize, Deserialize, Type, Clone, Copy, Debug, PartialEq, Eq)]
@@ -13,7 +11,6 @@ pub enum SearchRole {
     User,
     Assistant,
     ToolInput,
-    ToolOutput,
 }
 
 #[derive(Serialize, Deserialize, Type, Clone, Debug, PartialEq)]
@@ -21,11 +18,8 @@ pub enum SearchRole {
 pub struct SearchRequest {
     /// Whitespace-separated AND terms, `"phrase"`, `-exclude`.
     pub query: String,
+    /// Sessions started in or editing this Project.
     pub project_id: Option<ProjectId>,
-    pub time_range: Option<TimeRange>,
-    /// Empty = User + Assistant + ToolInput.
-    pub roles: Vec<SearchRole>,
-    pub live_only: bool,
     /// Default 50.
     pub max_sessions: u32,
     /// Default 5.
@@ -82,36 +76,6 @@ pub struct SearchResponse {
     pub elapsed_ms: f64,
     /// False while the full-text backlog is still being indexed.
     pub index_complete: bool,
-}
-
-#[derive(Serialize, Deserialize, Type, Clone, Debug, PartialEq)]
-#[serde(
-    tag = "kind",
-    rename_all = "camelCase",
-    rename_all_fields = "camelCase"
-)]
-pub enum ToolOutputSearchEvent {
-    Progress {
-        files_done: u32,
-        files_total: u32,
-    },
-    Groups {
-        groups: Vec<SearchGroup>,
-    },
-    Done {
-        #[specta(type = Number)]
-        elapsed_ms: f64,
-        cancelled: bool,
-    },
-    Error {
-        message: String,
-    },
-}
-
-#[derive(Serialize, Deserialize, Type, Clone, Debug, PartialEq)]
-#[serde(rename_all = "camelCase")]
-pub struct SearchHandle {
-    pub search_id: u32,
 }
 
 #[derive(Serialize, Deserialize, Type, Clone, Debug, PartialEq)]
