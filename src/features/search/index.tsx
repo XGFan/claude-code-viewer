@@ -16,7 +16,7 @@ import type {
   SearchRole,
 } from "@/ipc/bindings";
 import { formatRelative } from "@/lib/format";
-import { useHotkey } from "@/lib/hotkeys";
+import { keepOpenWhileComposing, useHotkey } from "@/lib/hotkeys";
 import { cn } from "@/lib/cn";
 import { queryKeys, useIndexStatus, useProjects } from "@/queries";
 import { useUi } from "@/state/ui";
@@ -266,6 +266,7 @@ export function SearchOverlay() {
         <DialogPrimitive.Content
           data-testid="search"
           aria-describedby={undefined}
+          onEscapeKeyDown={keepOpenWhileComposing}
           onOpenAutoFocus={(e) => {
             e.preventDefault();
             (e.currentTarget as HTMLElement).querySelector<HTMLInputElement>("[cmdk-input]")?.focus();

@@ -18,6 +18,16 @@ function matches(e: KeyboardEvent, combo: string): boolean {
   );
 }
 
+/** The key goes to an IME composition (e.g. Esc cancelling pinyin candidates); WebKit reports keyCode 229. */
+export function isComposingKey(e: KeyboardEvent): boolean {
+  return e.isComposing || e.keyCode === 229;
+}
+
+/** `onEscapeKeyDown` for dialogs with text inputs: Esc during a composition only cancels the composition. */
+export function keepOpenWhileComposing(e: KeyboardEvent) {
+  if (isComposingKey(e)) e.preventDefault();
+}
+
 function inEditable(target: EventTarget | null): boolean {
   const el = target as HTMLElement | null;
   if (!el) return false;
@@ -33,7 +43,7 @@ export function useHotkey(
   ref.current = handler;
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
-      if (!enableInInputs && inEditable(e.target)) return;
+      if (isComposingKey(e) || (!enableInInputs && inEditable(e.target))) return;
       if (!matches(e, combo)) return;
       e.preventDefault();
       ref.current(e);

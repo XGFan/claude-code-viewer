@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import { composeEnd, composeStart, queriesOf } from "./ime";
+import { composeEnd, composeStart, escWhileComposing, queriesOf } from "./ime";
 
 async function openSearch(page: Page) {
   await page.goto("/");
@@ -86,4 +86,11 @@ test("输入法组字期间不发起搜索，确认后才按确认的文字搜�
   await composeEnd(input(page), "令牌桶");
   await expect(page.getByTestId("search-hit").first()).toBeVisible();
   expect(await queriesOf(page, "search")).toEqual(["令牌桶"]);
+});
+
+test("组字时按 Esc 只取消候选词，不关闭搜索", async ({ page }) => {
+  await openSearch(page);
+  await composeStart(input(page), ["l", "ling"]);
+  await escWhileComposing(input(page));
+  await expect(page.getByTestId("search")).toBeVisible();
 });

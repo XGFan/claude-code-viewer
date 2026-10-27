@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import { composeEnd, composeStart } from "./ime";
+import { composeEnd, composeStart, escWhileComposing } from "./ime";
 
 const RICH_TITLE = "为 /v1/chat 接口增加令牌桶限流中间件";
 
@@ -88,6 +88,19 @@ test("快速打开：输入法组字期间不按未确认的拼音过滤", async
   await composeEnd(input, "限流");
   await expect(rows).toHaveCount(1);
   await expect(rows).toContainText(RICH_TITLE);
+});
+
+test("快速打开：组字时按 Esc 只取消候选词，不关闭弹窗", async ({ page }) => {
+  await page.goto("/");
+  await page.keyboard.press("Meta+P");
+  const dialog = page.getByTestId("quick-open");
+  const input = dialog.getByRole("combobox");
+  await composeStart(input, ["x", "xian"]);
+  await escWhileComposing(input);
+  await expect(dialog).toBeVisible();
+  await composeEnd(input, "");
+  await page.keyboard.press("Escape");
+  await expect(dialog).toBeHidden();
 });
 
 test("打开会话后渲染标题栏与消息", async ({ page }) => {

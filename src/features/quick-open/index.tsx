@@ -4,7 +4,7 @@ import { Dialog as DialogPrimitive } from "radix-ui";
 import { useEffect, useMemo, useState } from "react";
 import type { ProjectSummary, SessionQuery, SessionSummary } from "@/ipc/bindings";
 import { formatRelative } from "@/lib/format";
-import { useHotkey } from "@/lib/hotkeys";
+import { keepOpenWhileComposing, useHotkey } from "@/lib/hotkeys";
 import { useProjects, useSessions } from "@/queries";
 import { useUi } from "@/state/ui";
 import { matchProjects, matchSessions, sessionProjectIds, tokenize } from "./match";
@@ -111,6 +111,7 @@ export function QuickOpen() {
         <DialogPrimitive.Content
           data-testid="quick-open"
           aria-describedby={undefined}
+          onEscapeKeyDown={keepOpenWhileComposing}
           onOpenAutoFocus={(e) => {
             e.preventDefault();
             (e.currentTarget as HTMLElement).querySelector<HTMLInputElement>("[cmdk-input]")?.focus();

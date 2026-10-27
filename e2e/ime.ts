@@ -25,6 +25,13 @@ export async function composeEnd(input: Locator, text: string) {
   }, text);
 }
 
+/** Esc pressed while composing, as WebKit delivers it (the IME consumes it to cancel the candidates). */
+export async function escWhileComposing(input: Locator) {
+  await input.evaluate((el) => {
+    el.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", code: "Escape", isComposing: true, bubbles: true, cancelable: true }));
+  });
+}
+
 /** Queries passed to the mock `search` / `findInSession`. */
 export const queriesOf = (page: Page, method: "search" | "findInSession") =>
   page.evaluate((m) => (window.__cvCalls ?? []).filter((c) => c.method === m).map((c) => c.args[0] as string), method);
