@@ -438,7 +438,7 @@ export function locate(
 const defaultToolKey = (nodeId: string, toolUseId: string) => `tool:${nodeId}|${toolUseId}`;
 
 /**
- * Group open state: the user's choice, else open when it holds a failed call or an expanded call (a lone call row
+ * Group open state: the user's choice, else open when it holds an expanded call (a lone call row
  * that becomes a group when the next call arrives during live follow keeps the user's expansion visible).
  */
 export function isGroupOpen(
@@ -448,7 +448,7 @@ export function isGroupOpen(
 ): boolean {
   return (
     expanded[row.key] ??
-    (row.failedCount > 0 || row.items.some((it) => it.type === "call" && expanded[toolKey(it.node.id, it.call.toolUseId)] === true))
+    row.items.some((it) => it.type === "call" && expanded[toolKey(it.node.id, it.call.toolUseId)] === true)
   );
 }
 

@@ -74,7 +74,7 @@ function Tool({ node, call }: { node: Node; call: ToolCallBlock }) {
   );
 }
 
-/** "N 次工具调用 · 3 Bash · 2 Read"; collapsed unless it holds a failed call (or the user opened it). */
+/** "N 次工具调用 · 3 Bash · 2 Read"; collapsed unless the user opened it; failed calls are counted in the header. */
 function ToolGroup({ row }: { row: Extract<Row, { kind: "group" }> }) {
   const failed = row.failedCount > 0;
   const open = useUi((s) => isGroupOpen(row, s.expanded, toolKey));

@@ -132,7 +132,7 @@ function editDiff(input: Record<string, unknown>, extraJson: string | null | und
 export function EditView({ nodeId, call, startMs, ctx }: RenderProps) {
   const failed = isErr(call);
   const key = `tool:${nodeId}|${call.toolUseId}`;
-  const expanded = useOpenState(key, failed);
+  const expanded = useOpenState(key);
   const { input, loading, truncated } = useFullInput(call, ctx, expanded);
   const hasPatch = !!parseJson<{ structuredPatch?: unknown[] }>(call.result?.extraJson)?.structuredPatch?.length;
   const ready = hasPatch || !call.inputTruncated || !loading;
@@ -171,7 +171,7 @@ function FailText({ text }: { text: string }) {
 
 export function WriteView({ nodeId, call, startMs, ctx }: RenderProps) {
   const failed = isErr(call);
-  const expanded = useOpenState(`tool:${nodeId}|${call.toolUseId}`, failed);
+  const expanded = useOpenState(`tool:${nodeId}|${call.toolUseId}`);
   const { input, loading, truncated } = useFullInput(call, ctx, expanded);
   const path = str(input.file_path);
   const content = str(input.content);
@@ -383,7 +383,7 @@ export function CompactView({ nodeId, call, startMs, ctx }: RenderProps) {
 
 export function GenericView({ nodeId, call, startMs, ctx, summary }: RenderProps & { summary: string }) {
   const failed = isErr(call);
-  const expanded = useOpenState(`tool:${nodeId}|${call.toolUseId}`, failed);
+  const expanded = useOpenState(`tool:${nodeId}|${call.toolUseId}`);
   const { input, loading, truncated } = useFullInput(call, ctx, expanded);
   const out = useOutput(call, ctx);
   const pretty = useMemo(() => (expanded ? prettyJson(JSON.stringify(input)) : ""), [expanded, input]);
@@ -414,6 +414,6 @@ export function GenericView({ nodeId, call, startMs, ctx, summary }: RenderProps
   );
 }
 
-function useOpenState(key: string, failed: boolean): boolean {
-  return useUi((s) => s.expanded[key] ?? failed);
+function useOpenState(key: string): boolean {
+  return useUi((s) => s.expanded[key] ?? false);
 }

@@ -51,10 +51,12 @@ async function reveal(page: Page, target: Locator) {
   await target.first().scrollIntoViewIfNeeded();
 }
 
-test("失败的 Bash 默认展开并渲染 ANSI 颜色", async ({ page }) => {
+test("失败的 Bash 默认收起，展开后渲染 ANSI 颜色", async ({ page }) => {
   await openRich(page);
   const failed = page.locator('[data-tool="Bash"][data-failed]').first();
   await reveal(page, failed);
+  await expect(failed.getByTestId("terminal")).toHaveCount(0);
+  await failed.getByRole("button").first().click();
   const term = failed.getByTestId("terminal");
   await expect(term).toContainText("unresolved import");
   await expect(failed).toContainText("退出码 101");

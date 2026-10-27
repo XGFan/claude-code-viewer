@@ -105,10 +105,11 @@ describe("tool-call groups", () => {
     expect(isGroupOpen(g!, { ...expanded, [g!.key]: false })).toBe(false);
   });
 
-  it("counts failed calls so the group opens by default", () => {
+  it("counts failed calls but keeps the group collapsed by default", () => {
     const rich = buildRows(input(richMain, { subagents: richSubagents, workflows: richWorkflows }));
     const failedGroup = groups(rich.rows).find((g) => g.items.some((i) => i.type === "call" && i.call.toolUseId === "tu_bash_fail"));
     expect(failedGroup?.failedCount).toBe(1);
+    expect(isGroupOpen(failedGroup!, {})).toBe(false);
     expect(groups(rich.rows).filter((g) => g !== failedGroup).every((g) => g.failedCount === 0)).toBe(true);
   });
 });

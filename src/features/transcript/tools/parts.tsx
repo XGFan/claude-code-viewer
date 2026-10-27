@@ -38,7 +38,7 @@ export function Shell({
   children: ReactNode;
 }) {
   const key = toolKey(nodeId, call.toolUseId);
-  const open = useUi((s) => s.expanded[key] ?? (failed || defaultOpen));
+  const open = useUi((s) => s.expanded[key] ?? defaultOpen);
   const toggle = useUi((s) => s.toggleExpanded);
   const result = call.result;
   const dur =
@@ -53,7 +53,7 @@ export function Shell({
       <button
         type="button"
         aria-expanded={open}
-        onClick={() => toggle(key, failed || defaultOpen)}
+        onClick={() => toggle(key, defaultOpen)}
         className={cn(
           "flex w-full items-center gap-2 px-2.5 py-1.5 text-left text-[12px]",
           open && "border-b",

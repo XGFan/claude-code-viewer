@@ -71,15 +71,15 @@ test("切换 Branch 后后续内容随之改变", async ({ page }) => {
   await expect(transcript.getByText("先只加中间件，不要动 handler。")).toBeVisible();
 });
 
-test("工具调用合并成组，含失败调用的组默认展开", async ({ page }) => {
+test("工具调用合并成组，含失败调用的组也默认收起，组头显示失败数", async ({ page }) => {
   await openSession(page, RICH_TITLE);
   const transcript = page.getByTestId("transcript");
   await transcript.evaluate((e) => (e.scrollTop = 0));
   const groups = page.getByTestId("tool-group");
   await expect(groups.filter({ hasText: "2 次工具调用" })).not.toHaveAttribute("data-open");
   const failed = groups.filter({ hasText: "1 失败" });
-  await expect(failed).toHaveAttribute("data-open", "true");
-  await expect(failed.locator('[data-testid="tool-call"][data-failed]')).toBeVisible();
+  await expect(failed).not.toHaveAttribute("data-open");
+  await expect(failed.getByTestId("tool-call")).toHaveCount(0);
   await groups.filter({ hasText: "2 次工具调用" }).getByRole("button", { name: /2 次工具调用/ }).click();
   await expect(groups.filter({ hasText: "2 次工具调用" }).getByTestId("tool-call")).toHaveCount(2);
 });
