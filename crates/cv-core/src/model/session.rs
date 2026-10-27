@@ -57,6 +57,13 @@ pub enum Drill {
     Model {
         model: String,
     },
+    /// Main-file messages in `[from_ms, to_ms)` (an activity bar).
+    Span {
+        #[specta(type = Number)]
+        from_ms: f64,
+        #[specta(type = Number)]
+        to_ms: f64,
+    },
 }
 
 #[derive(Serialize, Deserialize, Type, Clone, Debug, Default, PartialEq)]

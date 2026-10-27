@@ -4,7 +4,7 @@ import { useMemo, useRef, type KeyboardEvent } from "react";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import type { Drill, ProjectSummary, SessionSort, SessionSummary } from "@/ipc/bindings";
 import { cn } from "@/lib/cn";
-import { formatCost, formatRelative, formatTokens } from "@/lib/format";
+import { formatCost, formatRelative, formatSpan, formatTokens } from "@/lib/format";
 import { useProjects, useSessionList } from "@/queries";
 import { useUi } from "@/state/ui";
 
@@ -236,5 +236,7 @@ function drillLabel(d: Drill): string {
       return `Subagent ${d.agentType}`;
     case "model":
       return `模型 ${d.model}`;
+    case "span":
+      return formatSpan(d.fromMs, d.toMs);
   }
 }

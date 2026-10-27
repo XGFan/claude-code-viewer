@@ -40,6 +40,25 @@ export const events = {
 };
 
 /* Types */
+/**
+ *  Message histogram over the requested range: the finest bucket with at most
+ *  [`crate::stats::MAX_ACTIVITY_BARS`] bars; empty bars included.
+ */
+export type Activity = {
+	bucket: ActivityBucket,
+	bars: ActivityBar[],
+};
+
+/**  Main-file messages in `[start_ms, end_ms)`. */
+export type ActivityBar = {
+	startMs: number,
+	endMs: number,
+	messages: number,
+};
+
+/**  Width of one activity bar; aligned in local time (whole n hours, midnight, Monday, the 1st). */
+export type ActivityBucket = "hour1" | "hour3" | "hour6" | "hour12" | "day" | "week" | "month";
+
 export type AgentTypeStat = {
 	agentType: string,
 	runs: number,
@@ -133,7 +152,9 @@ export type Drill =
 /**  `day` is `YYYY-MM-DD`. */
 { kind: "day"; day: string } | 
 /**  `weekday` 0 = Monday. */
-{ kind: "weekHour"; weekday: number; hour: number } | { kind: "tool"; name: string } | { kind: "agentType"; agentType: string } | { kind: "model"; model: string };
+{ kind: "weekHour"; weekday: number; hour: number } | { kind: "tool"; name: string } | { kind: "agentType"; agentType: string } | { kind: "model"; model: string } | 
+/**  Main-file messages in `[from_ms, to_ms)` (an activity bar). */
+{ kind: "span"; fromMs: number; toMs: number };
 
 export type ErrorCode = "notFound" | "invalidQuery" | "io" | "index" | "cancelled" | "internal";
 
@@ -471,6 +492,7 @@ export type Stats = {
 	daily: DailyModelTokens[],
 	heatDaily: DayCount[],
 	heatWeekHour: WeekHourCount[],
+	activity: Activity,
 	/**  The most expensive sessions in range (at most [`crate::stats::TOP_SESSIONS`]). */
 	sessions: SessionStat[],
 	tools: ToolStat[],

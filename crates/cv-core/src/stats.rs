@@ -1,4 +1,4 @@
-//! Stats panel aggregation (local-time day / week×hour buckets, A13).
+//! Stats panel aggregation (local-time buckets: days, week×hours, activity bars; A13).
 //!
 //! Semantics (each chart dimension has a [`Drill`](crate::model::Drill) in `index::reader` that
 //! returns exactly the contributing sessions):
@@ -15,20 +15,22 @@
 //! - `tools`: main + subagent tool calls (a Subagent's tool use is still the user's tool use);
 //!   failures are tool results with `is_error: true`.
 //! - `subagents`: one run per `subagents` row, grouped by `agent_type`.
+//! - `activity`: main-file messages per bar over the range (from the earliest message when it has no
+//!   lower bound, to now when it has no upper bound); see [`choose_bucket`].
 //!
 //! Days and hours are local wall-clock time via `chrono::Local` (DST-correct, honours `TZ`).
 
 use std::collections::{BTreeMap, HashMap};
 
-use chrono::{Datelike, Local, NaiveDate, NaiveDateTime, TimeZone, Timelike};
+use chrono::{Datelike, Duration, Local, NaiveDate, NaiveDateTime, TimeZone, Timelike};
 use rusqlite::types::Value;
 use rusqlite::{Connection, params_from_iter};
 
 use crate::error::CoreResult;
 use crate::index::schema::MSG_ASSISTANT;
 use crate::model::{
-    AgentTypeStat, DailyModelTokens, DayCount, SessionStat, Stats, StatsOverview, StatsRequest,
-    TimeRange, ToolStat, WeekHourCount,
+    Activity, ActivityBar, ActivityBucket, AgentTypeStat, DailyModelTokens, DayCount, SessionStat,
+    Stats, StatsOverview, StatsRequest, TimeRange, ToolStat, WeekHourCount,
 };
 
 /// Label of messages without a model and Subagent Runs without an `agentType`
@@ -84,6 +86,8 @@ pub fn compute(conn: &Connection, r: &StatsRequest) -> CoreResult<Stats> {
     let mut cost = 0f64;
     let mut unpriced = 0u32;
     let mut heat_daily: BTreeMap<NaiveDate, u32> = BTreeMap::new();
+    // Main-file messages per local hour, the unit the activity bars are summed from.
+    let mut hourly: BTreeMap<NaiveDateTime, u32> = BTreeMap::new();
     let mut week_hour = [[0u32; 24]; 7];
     let mut daily: BTreeMap<(NaiveDate, String), [f64; 4]> = BTreeMap::new();
     {
@@ -111,6 +115,7 @@ pub fn compute(conn: &Connection, r: &StatsRequest) -> CoreResult<Stats> {
                 messages += 1;
                 *heat_daily.entry(day).or_default() += 1;
                 week_hour[t.weekday().num_days_from_monday() as usize][t.hour() as usize] += 1;
+                *hourly.entry(floor(ActivityBucket::Hour1, t)).or_default() += 1;
             }
             let tok: [f64; 4] = [
                 row.get::<_, i64>(5)? as f64,
@@ -190,6 +195,7 @@ pub fn compute(conn: &Connection, r: &StatsRequest) -> CoreResult<Stats> {
                 messages,
             })
             .collect(),
+        activity: activity(&hourly, r.time_range.as_ref()),
         heat_week_hour: (0..7u32)
             .flat_map(|w| (0..24u32).map(move |h| (w, h)))
             .filter_map(|(weekday, hour)| {
@@ -205,6 +211,131 @@ pub fn compute(conn: &Connection, r: &StatsRequest) -> CoreResult<Stats> {
         tools: tool_stats(conn, ranged, from, to)?,
         subagents: agent_type_stats(conn, ranged, from, to)?,
     })
+}
+
+/// Most bars in the activity histogram.
+pub const MAX_ACTIVITY_BARS: usize = 170;
+
+const BUCKETS: [ActivityBucket; 7] = [
+    ActivityBucket::Hour1,
+    ActivityBucket::Hour3,
+    ActivityBucket::Hour6,
+    ActivityBucket::Hour12,
+    ActivityBucket::Day,
+    ActivityBucket::Week,
+    ActivityBucket::Month,
+];
+
+/// Start of the bucket holding the local time `t`.
+fn floor(b: ActivityBucket, t: NaiveDateTime) -> NaiveDateTime {
+    let midnight = t.date().and_hms_opt(0, 0, 0).unwrap_or(t);
+    let hours = |n: u32| midnight + Duration::hours(i64::from(t.hour() - t.hour() % n));
+    match b {
+        ActivityBucket::Hour1 => hours(1),
+        ActivityBucket::Hour3 => hours(3),
+        ActivityBucket::Hour6 => hours(6),
+        ActivityBucket::Hour12 => hours(12),
+        ActivityBucket::Day => midnight,
+        ActivityBucket::Week => {
+            midnight - Duration::days(i64::from(t.weekday().num_days_from_monday()))
+        }
+        ActivityBucket::Month => midnight.with_day(1).unwrap_or(midnight),
+    }
+}
+
+/// Start of the bucket after the one starting at `t`.
+fn next(b: ActivityBucket, t: NaiveDateTime) -> NaiveDateTime {
+    match b {
+        ActivityBucket::Hour1 => t + Duration::hours(1),
+        ActivityBucket::Hour3 => t + Duration::hours(3),
+        ActivityBucket::Hour6 => t + Duration::hours(6),
+        ActivityBucket::Hour12 => t + Duration::hours(12),
+        ActivityBucket::Day => t + Duration::days(1),
+        ActivityBucket::Week => t + Duration::days(7),
+        ActivityBucket::Month => t
+            .checked_add_months(chrono::Months::new(1))
+            .unwrap_or(t + Duration::days(31)),
+    }
+}
+
+/// Unix ms of a local time: the first of the two instants of a time repeated when clocks go back
+/// (so a bar holds both readings of that hour, as the per-hour counts do); a time skipped when
+/// clocks go forward maps to the instant after the gap. Candidates are checked by converting back,
+/// since chrono also offers the old offset right at the end of a repeated hour.
+fn local_ms(t: NaiveDateTime) -> i64 {
+    (0..3)
+        .find_map(|h| {
+            let wall = t + Duration::hours(h);
+            let r = Local.from_local_datetime(&wall);
+            [r.earliest(), r.latest()]
+                .into_iter()
+                .flatten()
+                .filter(|d| d.with_timezone(&Local).naive_local() == wall)
+                .map(|d| d.timestamp_millis())
+                .min()
+        })
+        .unwrap_or(0)
+}
+
+/// The finest bucket that covers `[from, to]` (local times) in at most [`MAX_ACTIVITY_BARS`] bars.
+pub fn choose_bucket(from: NaiveDateTime, to: NaiveDateTime) -> ActivityBucket {
+    BUCKETS
+        .into_iter()
+        .find(|&b| {
+            let mut t = floor(b, from);
+            let mut n = 0;
+            while t <= to && n <= MAX_ACTIVITY_BARS {
+                t = next(b, t);
+                n += 1;
+            }
+            n <= MAX_ACTIVITY_BARS
+        })
+        .unwrap_or(ActivityBucket::Month)
+}
+
+/// The histogram over the request's range from per-hour counts; empty when unbounded and there is
+/// no message.
+fn activity(hourly: &BTreeMap<NaiveDateTime, u32>, range: Option<&TimeRange>) -> Activity {
+    let from = range
+        .and_then(|r| r.from_ms)
+        .and_then(|ms| local_time(ms as i64))
+        .or_else(|| hourly.keys().next().copied());
+    // Unbounded: up to now, or to the latest message if a clock ahead of ours dated it later.
+    let to = range
+        .and_then(|r| r.to_ms)
+        .and_then(|ms| local_time(ms as i64))
+        .unwrap_or_else(|| {
+            let now = Local::now().naive_local();
+            hourly.keys().next_back().map_or(now, |&last| last.max(now))
+        });
+    let Some(from) = from.filter(|f| *f <= to) else {
+        return Activity::default();
+    };
+    let bucket = choose_bucket(from, to);
+    // Month bars are the coarsest: past that, keep the latest MAX_ACTIVITY_BARS months (an absurd
+    // timestamp such as 1970 must not stretch the axis over decades).
+    let from = if bucket == ActivityBucket::Month {
+        to.checked_sub_months(chrono::Months::new(MAX_ACTIVITY_BARS as u32 - 1))
+            .map_or(from, |cap| from.max(cap))
+    } else {
+        from
+    };
+    let mut bars = Vec::new();
+    let mut t = floor(bucket, from);
+    while t <= to {
+        let end = next(bucket, t);
+        let (start_ms, end_ms) = (local_ms(t), local_ms(end));
+        // An hour skipped by a DST change is no time at all: no bar (bars stay contiguous).
+        if end_ms > start_ms {
+            bars.push(ActivityBar {
+                start_ms: start_ms as f64,
+                end_ms: end_ms as f64,
+                messages: hourly.range(t..end).map(|(_, n)| n).sum(),
+            });
+        }
+        t = end;
+    }
+    Activity { bucket, bars }
 }
 
 fn tool_stats(conn: &Connection, ranged: bool, from: i64, to: i64) -> CoreResult<Vec<ToolStat>> {

@@ -1,4 +1,6 @@
 import type {
+  Activity,
+  ActivityBucket,
   AppError,
   AppInfo,
   BranchChoice,
@@ -392,6 +394,8 @@ function listSessions(q: SessionQuery): SessionSummary[] {
           return d.agentTypes.includes(drill.agentType);
         case "model":
           return s.primaryModel === drill.model;
+        case "span":
+          return s.lastActiveMs >= drill.fromMs && s.createdMs < drill.toMs;
       }
     });
   }
@@ -455,6 +459,41 @@ function sessionDetail(sessionId: string): SessionDetail {
   };
 }
 
+const HOUR = DAY / 24;
+const ACTIVITY_BUCKETS: [ActivityBucket, number][] = [
+  ["hour1", HOUR],
+  ["hour3", 3 * HOUR],
+  ["hour6", 6 * HOUR],
+  ["hour12", 12 * HOUR],
+  ["day", DAY],
+  ["week", 7 * DAY],
+  ["month", 30 * DAY],
+];
+
+/** Same bucket rule as `stats::choose_bucket` (≤ 170 bars, local alignment), with made-up counts. */
+function mockActivity(fromMs: number | null, toMs: number | null): Activity {
+  const to = toMs ?? NOW;
+  const from = fromMs ?? NOW - 400 * DAY;
+  const [bucket, len] = ACTIVITY_BUCKETS.find(([, l]) => Math.floor((to - from) / l) + 2 <= 170) ?? ACTIVITY_BUCKETS[6]!;
+  const t = new Date(from);
+  t.setMinutes(0, 0, 0);
+  if (len < DAY) t.setHours(t.getHours() - (t.getHours() % (len / HOUR)));
+  else t.setHours(0);
+  if (bucket === "week") t.setDate(t.getDate() - ((t.getDay() + 6) % 7));
+  if (bucket === "month") t.setDate(1);
+  const bars: Activity["bars"] = [];
+  for (let i = 0; t.getTime() <= to; i++) {
+    const start = t.getTime();
+    if (bucket === "month") t.setMonth(t.getMonth() + 1);
+    else if (len >= DAY) t.setDate(t.getDate() + len / DAY);
+    else t.setHours(t.getHours() + len / HOUR);
+    const h = new Date(start).getHours();
+    const awake = len >= DAY || (h >= 9 && h <= 23) ? 1 : 0.05;
+    bars.push({ startMs: start, endMs: t.getTime(), messages: Math.round(awake * (Math.abs(Math.sin(i * 12.9898)) * 40) * (len / HOUR) ** 0.5) });
+  }
+  return { bucket, bars };
+}
+
 function getStats(req: StatsRequest): Stats {
   const from = req.timeRange?.fromMs ?? null;
   const to = req.timeRange?.toMs ?? null;
@@ -483,6 +522,7 @@ function getStats(req: StatsRequest): Stats {
     daily,
     heatDaily: statsSeed.heatDaily.filter((d) => inRange(d.day)),
     sessions: ranked,
+    activity: mockActivity(from, to),
   };
 }
 

@@ -73,6 +73,8 @@ export const stats = {
   overview: { sessions: 10, messages: 1286, outputTokens: daily.reduce((s, d) => s + d.output, 0), activeDays: 24, cost: 412.37, unpricedMessages: 0 },
   daily,
   heatDaily: Array.from({ length: 90 }, (_, i) => ({ day: localDay(NOW - (89 - i) * DAY), messages: Math.round(rnd(i + 7) * 80) })),
+  // Filled per request by `getStats`.
+  activity: { bucket: "day", bars: [] },
   heatWeekHour: Array.from({ length: 7 * 24 }, (_, i) => ({
     weekday: Math.floor(i / 24),
     hour: i % 24,

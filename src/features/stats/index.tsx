@@ -6,7 +6,7 @@ import { Fragment, type ReactNode, useMemo, useState } from "react";
 import type { Drill, Stats, TimeRange } from "@/ipc/bindings";
 import { cn } from "@/lib/cn";
 import { cycleEnd, cycleStart } from "@/lib/cycle";
-import { formatCost, formatDuration, formatTokens } from "@/lib/format";
+import { formatCost, formatTokens } from "@/lib/format";
 import { useStats } from "@/queries";
 import { useUi } from "@/state/ui";
 import { Chart, useDark } from "./Chart";
@@ -18,8 +18,8 @@ import {
   type ModelFamily,
   family,
   dailyOption,
-  heatDayOption,
-  heatWeekHourOption,
+  activityOption,
+  BUCKET_LABEL,
   themes,
 } from "./charts";
 
@@ -267,7 +267,6 @@ function StatsPanel() {
   const theme = themes[dark ? "dark" : "light"];
   const [rangeKey, setRangeKey] = useState<RangeKey>("30");
   const [metric, setMetric] = useState<Metric>("all");
-  const [heat, setHeat] = useState<"day" | "weekHour">("weekHour");
 
   const weeklyReset = useUi((s) => s.weeklyReset);
   const rangeDays = RANGES.find((r) => r.key === rangeKey)!.days;
@@ -300,17 +299,11 @@ function StatsPanel() {
   };
 
   const dailyOpt = useMemo(() => (stats ? dailyOption(stats.daily, metric, theme) : null), [stats, metric, theme]);
-  const heatOpt = useMemo(
-    () => (stats ? (heat === "day" ? heatDayOption(stats.heatDaily, theme) : heatWeekHourOption(stats.heatWeekHour, theme)) : null),
-    [stats, heat, theme],
-  );
+  const activityOpt = useMemo(() => (stats ? activityOption(stats.activity, theme) : null), [stats, theme]);
 
   const empty = stats != null && stats.overview.sessions === 0 && stats.daily.length === 0;
   const present = stats ? FAMILIES.filter((f) => stats.daily.some((d) => family(d.model) === f)) : [];
   const maxCost = Math.max(0.01, ...(stats?.sessions.map((s) => s.cost) ?? []));
-  const maxTool = Math.max(1, ...(stats?.tools.map((t) => t.calls) ?? []));
-  const tools = stats ? [...stats.tools].sort((a, b) => b.calls - a.calls) : [];
-  const agents = stats ? [...stats.subagents].sort((a, b) => b.runs - a.runs) : [];
 
   return (
     <div data-testid="stats" className="@container flex h-full min-w-0 flex-col bg-list">
@@ -396,7 +389,7 @@ function StatsPanel() {
                 )}
               </Card>
 
-              <Card title="Session 排行" aside={<span className="text-[11px] text-secondary">按 API 金额</span>}>
+              <Card className="@3xl:row-span-2" title="Session 排行" aside={<span className="text-[11px] text-secondary">按 API 金额</span>}>
                 {stats.sessions.length === 0 && <Empty />}
                 {stats.sessions.map((s) => (
                   <button
@@ -419,91 +412,30 @@ function StatsPanel() {
               </Card>
 
               <Card
+                className="@3xl:col-span-2"
                 title="活跃时段"
-                testId="stats-heat"
+                testId="stats-activity"
                 aside={
-                  <Segmented
-                    small
-                    label="热力图类型"
-                    value={heat}
-                    options={[
-                      { key: "day", label: "按日" },
-                      { key: "weekHour", label: "星期 × 小时" },
-                    ]}
-                    onChange={setHeat}
-                  />
+                  stats.activity.bars.length > 0 && (
+                    <span data-testid="activity-bucket" title="每根柱子的时长" className="rounded border border-border px-1.5 text-[10px] text-secondary tabular-nums">
+                      {BUCKET_LABEL[stats.activity.bucket]}
+                    </span>
+                  )
                 }
               >
-                <Chart
-                  testId="heat-chart"
-                  height={heat === "day" ? 150 : 170}
-                  label={heat === "day" ? "按日活跃热力图" : "星期乘小时活跃热力图"}
-                  option={heatOpt!}
-                  onPick={(p) => {
-                    const d = p.data as (string | number)[] | undefined;
-                    if (!d) return;
-                    drill(heat === "day" ? { kind: "day", day: d[3] as string } : { kind: "weekHour", weekday: d[1] as number, hour: d[0] as number });
-                  }}
-                />
-                <div className="text-[11px] text-secondary">消息数 · 颜色越深越多</div>
-              </Card>
-
-              <Card title="工具调用" aside={<span className="text-[11px] text-secondary">次数 · 失败率</span>}>
-                {tools.length === 0 && <Empty />}
-                <div className="flex max-h-56 flex-col gap-1.5 overflow-auto">
-                  {tools.map((t) => {
-                    const rate = t.calls ? (t.failures / t.calls) * 100 : 0;
-                    const high = rate > 5;
-                    return (
-                      <button
-                        key={t.name}
-                        type="button"
-                        data-testid="tool-row"
-                        data-high-failure={high}
-                        onClick={() => drill({ kind: "tool", name: t.name })}
-                        className="flex items-center gap-2 rounded text-left text-[12px] outline-none hover:bg-code focus-visible:ring-2 focus-visible:ring-accent"
-                      >
-                        <code className="w-24 shrink-0 truncate font-mono text-[11px]" title={t.name}>
-                          {t.name}
-                        </code>
-                        <Bar className="flex-1" pct={(t.calls / maxTool) * 100} color="#6f7c8c" />
-                        <span className="w-12 shrink-0 text-right tabular-nums">{num(t.calls)}</span>
-                        <span className={cn("w-14 shrink-0 whitespace-nowrap text-right text-[11px] tabular-nums", high ? "font-semibold text-error" : "text-secondary")}>
-                          {high && "▲ "}
-                          {rate.toFixed(rate < 10 ? 1 : 0)}%
-                        </span>
-                      </button>
-                    );
-                  })}
-                </div>
-              </Card>
-
-              <Card title="Subagent" aside={<span className="text-[11px] text-secondary">按 agentType</span>}>
-                {agents.length === 0 ? (
+                {stats.activity.bars.length === 0 ? (
                   <Empty />
                 ) : (
-                  <div className="flex flex-col text-[12px]">
-                    <div className="flex border-b border-border pb-1 text-[11px] text-secondary">
-                      <span className="flex-1">类型</span>
-                      <span className="w-12 text-right">次数</span>
-                      <span className="w-[72px] text-right">输出 token</span>
-                      <span className="w-16 text-right">平均耗时</span>
-                    </div>
-                    {agents.map((a) => (
-                      <button
-                        key={a.agentType}
-                        type="button"
-                        data-testid="agent-row"
-                        onClick={() => drill({ kind: "agentType", agentType: a.agentType })}
-                        className="flex rounded py-0.5 text-left outline-none hover:bg-code focus-visible:ring-2 focus-visible:ring-accent"
-                      >
-                        <span className="flex-1 truncate">{a.agentType}</span>
-                        <span className="w-12 text-right tabular-nums">{num(a.runs)}</span>
-                        <span className="w-[72px] text-right tabular-nums">{formatTokens(a.outputTokens)}</span>
-                        <span className="w-16 text-right text-secondary tabular-nums">{formatDuration(a.avgDurationMs)}</span>
-                      </button>
-                    ))}
-                  </div>
+                  <Chart
+                    testId="activity-chart"
+                    height={160}
+                    label="各时间段的消息数柱状图"
+                    option={activityOpt!}
+                    onPick={(p) => {
+                      const bar = p.dataIndex == null ? undefined : stats.activity.bars[p.dataIndex];
+                      if (bar) drill({ kind: "span", fromMs: bar.startMs, toMs: bar.endMs });
+                    }}
+                  />
                 )}
               </Card>
             </div>

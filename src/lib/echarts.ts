@@ -1,9 +1,9 @@
-import { BarChart, HeatmapChart } from "echarts/charts";
-import { GridComponent, TooltipComponent, VisualMapComponent } from "echarts/components";
+import { BarChart } from "echarts/charts";
+import { GridComponent, TooltipComponent } from "echarts/components";
 import * as echarts from "echarts/core";
 import { CanvasRenderer } from "echarts/renderers";
 
-echarts.use([BarChart, HeatmapChart, GridComponent, TooltipComponent, VisualMapComponent, CanvasRenderer]);
+echarts.use([BarChart, GridComponent, TooltipComponent, CanvasRenderer]);
 
 export type ChartOption = echarts.EChartsCoreOption;
 

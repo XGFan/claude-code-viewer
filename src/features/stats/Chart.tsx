@@ -20,7 +20,7 @@ interface Props {
   height: number;
   label: string;
   testId?: string;
-  onPick?: (params: { data?: unknown; name?: string; seriesName?: string }) => void;
+  onPick?: (params: { data?: unknown; name?: string; seriesName?: string; dataIndex?: number }) => void;
 }
 
 export function Chart({ option, height, label, testId, onPick }: Props) {

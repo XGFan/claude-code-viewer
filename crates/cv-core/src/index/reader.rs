@@ -209,7 +209,8 @@ pub fn project_match(ids: &[String], args: &mut Vec<Value>) -> String {
 /// - `Day` / `WeekHour`: a main-file message at that local day / weekday×hour;
 /// - `Model`: a main or Subagent message of that model that carries tokens;
 /// - `Tool`: a main or Subagent tool call of that name;
-/// - `AgentType`: a Subagent Run of that type (range on its start time).
+/// - `AgentType`: a Subagent Run of that type (range on its start time);
+/// - `Span`: a main-file message in `[from_ms, to_ms)` (an activity bar).
 pub fn list_sessions(conn: &Connection, q: &SessionQuery) -> CoreResult<Vec<SessionSummary>> {
     let mut conds = vec!["s.is_empty = 0".to_owned()];
     let mut args: Vec<Value> = Vec::new();
@@ -254,6 +255,15 @@ pub fn list_sessions(conn: &Connection, q: &SessionQuery) -> CoreResult<Vec<Sess
             }
             None => conds.push("0".into()),
         },
+        Some(Drill::Span { from_ms, to_ms }) => {
+            conds.push(
+                "s.id IN (SELECT m.session_id FROM messages m WHERE m.agent_id = ''
+                    AND m.ts_ms >= ? AND m.ts_ms <= ?)"
+                    .into(),
+            );
+            args.push(Value::Integer((*from_ms as i64).max(from)));
+            args.push(Value::Integer((*to_ms as i64 - 1).min(to)));
+        }
         Some(Drill::Model { model }) => {
             args.push(Value::Text(stats::UNKNOWN.to_owned()));
             args.push(Value::Text(model.clone()));

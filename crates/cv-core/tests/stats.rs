@@ -693,3 +693,172 @@ fn tokens_sort_orders_by_output_tokens() {
         .sum();
     assert_eq!(list[0].tokens.output, top as f64, "main + subagents");
 }
+
+// ---------------------------------------------------------------- activity
+
+#[test]
+fn activity_bucket_is_the_finest_with_at_most_170_bars() {
+    use cv_core::model::ActivityBucket as B;
+    use cv_core::stats::choose_bucket;
+    let at = |s: &str| NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M").unwrap();
+    let to = at("2026-10-27 13:20");
+    let back = |days: i64| to - chrono::Duration::days(days);
+    assert_eq!(choose_bucket(back(7), to), B::Hour1);
+    assert_eq!(choose_bucket(back(30), to), B::Hour6);
+    assert_eq!(choose_bucket(back(90), to), B::Day);
+    assert_eq!(choose_bucket(back(400), to), B::Week);
+    assert_eq!(choose_bucket(back(3650), to), B::Month);
+}
+
+#[test]
+fn activity_counts_every_main_message_and_bars_drill_to_their_sessions() {
+    let env = scanned(MIXED);
+    let o = &env.oracle;
+    let st = all_time(&env);
+    let a = &st.activity;
+    assert!(!a.bars.is_empty());
+    // Unbounded: from the earliest message's bucket, contiguous, empty bars included.
+    assert!(a.bars.windows(2).all(|w| w[0].end_ms == w[1].start_ms));
+    assert_eq!(
+        a.bars.iter().map(|b| b.messages).sum::<u32>(),
+        st.overview.messages
+    );
+    for b in a.bars.iter().filter(|b| b.messages > 0) {
+        let want: BTreeSet<String> = o
+            .sessions
+            .iter()
+            .filter(|(_, s)| {
+                s.msgs
+                    .iter()
+                    .any(|m| m.main && (m.ts as f64) >= b.start_ms && (m.ts as f64) < b.end_ms)
+            })
+            .map(|(id, _)| id.clone())
+            .collect();
+        let drill = Drill::Span {
+            from_ms: b.start_ms,
+            to_ms: b.end_ms,
+        };
+        assert_eq!(drill_ids(&env, drill, None), want, "bar at {}", b.start_ms);
+    }
+}
+
+#[test]
+fn activity_over_seven_days_is_hourly() {
+    let env = scanned(MIXED);
+    let from = DateTime::parse_from_rfc3339("2026-06-06T10:30:00Z")
+        .unwrap()
+        .timestamp_millis() as f64;
+    let st = env
+        .engine
+        .stats(&StatsRequest {
+            time_range: Some(TimeRange {
+                from_ms: Some(from),
+                to_ms: Some(from + 7.0 * 86_400_000.0),
+            }),
+        })
+        .unwrap();
+    assert_eq!(st.activity.bucket, cv_core::model::ActivityBucket::Hour1);
+    // 7 × 24 hours from a mid-hour start touch 169 hourly bars.
+    assert_eq!(st.activity.bars.len(), 169);
+    assert_eq!(
+        st.activity.bars.iter().map(|b| b.messages).sum::<u32>(),
+        st.overview.messages
+    );
+}
+
+#[test]
+fn span_drill_is_limited_to_the_time_range() {
+    let env = scanned(MIXED);
+    let o = &env.oracle;
+    let st = all_time(&env);
+    let bar = st
+        .activity
+        .bars
+        .iter()
+        .find(|b| b.messages > 1)
+        .expect("a bar with messages");
+    let main_in = |s: &Sess, from: f64, to: f64| {
+        s.msgs
+            .iter()
+            .any(|m| m.main && (m.ts as f64) >= from && (m.ts as f64) < to)
+    };
+    // A range covering only the second half of the bar.
+    let mid = (bar.start_ms + bar.end_ms) / 2.0;
+    let range = TimeRange {
+        from_ms: Some(mid),
+        to_ms: None,
+    };
+    let want: BTreeSet<String> = o
+        .sessions
+        .iter()
+        .filter(|(_, s)| main_in(s, mid, bar.end_ms))
+        .map(|(id, _)| id.clone())
+        .collect();
+    let drill = Drill::Span {
+        from_ms: bar.start_ms,
+        to_ms: bar.end_ms,
+    };
+    assert_eq!(drill_ids(&env, drill, Some(range)), want);
+}
+
+/// Child half of `activity_bars_follow_dst_changes`: prints hourly bar widths (minutes) around
+/// both 2026 US DST changes under the inherited `TZ`.
+#[test]
+#[ignore = "spawned by activity_bars_follow_dst_changes with TZ set"]
+fn dst_probe() {
+    if std::env::var_os("CV_DST_PROBE").is_none() {
+        return;
+    }
+    let env = scanned(MIXED);
+    let widths = |from_utc: &str| {
+        let from = DateTime::parse_from_rfc3339(from_utc)
+            .unwrap()
+            .timestamp_millis() as f64;
+        let st = env
+            .engine
+            .stats(&StatsRequest {
+                time_range: Some(TimeRange {
+                    from_ms: Some(from),
+                    to_ms: Some(from + 5.0 * 3_600_000.0),
+                }),
+            })
+            .unwrap();
+        let bars = &st.activity.bars;
+        assert!(bars.windows(2).all(|w| w[0].end_ms == w[1].start_ms));
+        bars.iter()
+            .map(|b| ((b.end_ms - b.start_ms) / 60_000.0).to_string())
+            .collect::<Vec<_>>()
+            .join(",")
+    };
+    // 00:00 local on each change day in New York (EDT / EST).
+    println!(
+        "DST_PROBE {}|{}",
+        widths("2026-11-01T04:00:00Z"),
+        widths("2026-03-08T05:00:00Z")
+    );
+}
+
+#[test]
+fn activity_bars_follow_dst_changes() {
+    let out = Command::new(std::env::current_exe().unwrap())
+        .args(["--exact", "dst_probe", "--ignored", "--nocapture"])
+        .env("CV_DST_PROBE", "1")
+        .env("TZ", "America/New_York")
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let text = String::from_utf8_lossy(&out.stdout).to_string();
+    let line = text
+        .lines()
+        .find_map(|l| l.strip_prefix("DST_PROBE "))
+        .expect("probe output");
+    let (fall, spring) = line.split_once('|').unwrap();
+    // Clocks go back at 02:00: the 01:00 bar holds both readings of that hour (00:00 to 04:00 local).
+    assert_eq!(fall, "60,120,60,60,60");
+    // Clocks go forward at 02:00: that hour does not exist and gets no bar (00:00 to 06:00 local).
+    assert_eq!(spring, "60,60,60,60,60,60");
+}
