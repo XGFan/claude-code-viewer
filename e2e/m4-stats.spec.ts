@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test, type Page } from "@playwright/test";
 
 test("统计面板渲染卡片与图表", async ({ page }) => {
   await page.goto("/");
@@ -182,38 +182,63 @@ test("滚动统计内容时，标题与时间范围固定不动", async ({ page 
   await expect(range).toBeInViewport();
 });
 
-test("本周期：按设定的每周重置时间统计，设置会被记住", async ({ page }) => {
+/** Sets the weekly reset in Settings › 通用 and closes the dialog. */
+async function setReset(page: Page, weekday: string, time?: string) {
+  await page.getByTestId("settings-button").click();
+  await page.getByRole("tab", { name: "通用" }).click();
+  await page.getByLabel("重置日").selectOption(weekday);
+  if (time) await page.getByLabel("重置时间").fill(time);
+  await page.keyboard.press("Escape");
+}
+
+test("本周期：按设置里的每周重置时间统计，设置会被记住", async ({ page }) => {
   // A Thursday morning; with a Monday 14:00 reset the cycle began three days ago.
   await page.clock.setFixedTime(new Date("2026-10-15T10:00:00"));
   await page.goto("/");
+  await setReset(page, "0", "14:00");
   await page.getByTestId("nav-stats").click();
   await page.getByRole("button", { name: "本周期" }).click();
-  await page.getByLabel("重置日").selectOption("0");
-  await page.getByLabel("重置时间").fill("14:00");
   const span = page.getByTestId("cycle-span");
   await expect(span).toHaveText("本周期 10月12日 周一 14:00 至 10月19日 周一 14:00，还剩 4 天 4 小时");
   await expect(page.getByTestId("stat-card")).toHaveCount(5);
+  await expect(page.getByTestId("stats").getByLabel("重置日")).toHaveCount(0);
+  await page.keyboard.press("Escape");
 
-  await page.getByLabel("重置日").selectOption("3");
   // Thursday 14:00 is still ahead today, so the cycle began last Thursday.
+  await setReset(page, "3");
+  await page.getByTestId("nav-stats").click();
+  await page.getByRole("button", { name: "本周期" }).click();
   await expect(span).toContainText("本周期 10月8日 周四 14:00");
 
   await page.reload();
+  await page.getByTestId("settings-button").click();
+  await page.getByRole("tab", { name: "通用" }).click();
+  await expect(page.getByLabel("重置时间")).toHaveValue("14:00");
+  await page.keyboard.press("Escape");
   await page.getByTestId("nav-stats").click();
   await page.getByRole("button", { name: "本周期" }).click();
-  await expect(page.getByLabel("重置时间")).toHaveValue("14:00");
   await expect(span).toContainText("至 10月15日 周四 14:00，还剩 4 小时 0 分");
 });
 
-test("切到本周期时，标题栏不移动", async ({ page }) => {
+test("切换时间范围时页面不移动：标题栏、卡片与 Token 卡片里的输入输出位置不变", async ({ page }) => {
+  await page.setViewportSize({ width: 1400, height: 900 });
   await page.goto("/");
   await page.getByTestId("nav-stats").click();
-  const heading = page.getByRole("heading", { name: "统计" });
-  const range = page.getByRole("group", { name: "时间范围" });
-  const before = [(await heading.boundingBox())!.y, (await range.boundingBox())!.y];
-  await page.getByRole("button", { name: "本周期" }).click();
-  await expect(page.getByTestId("cycle-bar")).toBeVisible();
-  expect([(await heading.boundingBox())!.y, (await range.boundingBox())!.y]).toEqual(before);
+  const watched = [
+    page.getByRole("heading", { name: "统计" }),
+    page.getByRole("group", { name: "时间范围" }),
+    page.getByTestId("stat-card").first(),
+    page.getByTestId("token-output"),
+  ];
+  const positions = async () => Promise.all(watched.map(async (l) => (await l.boundingBox())!).map(async (b) => [(await b).x, (await b).y]));
+  const before = await positions();
+  for (const name of ["本周期", "全部", "7 天"]) {
+    await page.getByRole("group", { name: "时间范围" }).getByRole("button", { name }).click();
+    await expect(page.getByTestId("token-output")).toBeVisible();
+    expect(await positions()).toEqual(before);
+  }
+  await page.getByRole("group", { name: "时间范围" }).getByRole("button", { name: "本周期" }).click();
+  await expect(page.getByTestId("cycle-span")).toContainText("本周期");
 });
 
 test("卡片高度随自身内容，不被同行更高的卡片撑高", async ({ page }) => {

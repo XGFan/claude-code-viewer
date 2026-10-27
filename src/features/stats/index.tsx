@@ -60,7 +60,8 @@ function Segmented<T extends string>({
             "px-3 text-[12px] outline-none focus-visible:ring-2 focus-visible:ring-accent",
             small ? "h-6 px-2 text-[11px]" : "h-7",
             i > 0 && "border-l border-border",
-            value === o.key ? "bg-selection font-semibold text-accent" : "text-secondary hover:bg-code",
+            // No bold for the active option: a wider label would shift the right-aligned group.
+            value === o.key ? "bg-selection text-accent" : "text-secondary hover:bg-code",
           )}
         >
           {o.label}
@@ -112,9 +113,9 @@ function TokenCard({ stats }: { stats: Stats }) {
   const totalIn = t.input + t.read + t.write;
   const pct = (v: number) => (totalIn ? (v / totalIn) * 100 : 0);
   const parts = [
-    { label: "缓存读取", value: t.read, className: "bg-accent" },
-    { label: "缓存写入", value: t.write, className: "bg-accent/45" },
-    { label: "新输入", value: t.input, className: "bg-text/20" },
+    { label: "缓存读取", value: t.read, className: "bg-accent", hint: "已在缓存中的前缀（系统提示词、之前的对话），约按 0.1 倍输入单价计费" },
+    { label: "缓存写入", value: t.write, className: "bg-accent/45", hint: "本次写入缓存、下一轮可按缓存读取复用的内容，按 1.25 倍（5 分钟）或 2 倍（1 小时）输入单价计费" },
+    { label: "未缓存输入", value: t.input, className: "bg-text/20", hint: "既未读取也未写入缓存的输入，按原价计费" },
   ];
   return (
     <div data-testid="stat-card" data-card="tokens" className={cn(CARD, "col-span-2 gap-[5px]")}>
@@ -125,11 +126,16 @@ function TokenCard({ stats }: { stats: Stats }) {
           缓存命中率 <span className="font-semibold text-text">{Math.round(pct(t.read))}%</span>
         </span>
       </div>
-      <div className="flex items-baseline gap-2.5">
-        <span className="text-[24px] leading-tight font-semibold tracking-tight">{formatTokens(totalIn)}</span>
-        <span className="text-[12px] text-secondary">输入</span>
-        <span className="ml-1.5 text-[24px] leading-tight font-semibold tracking-tight">{formatTokens(stats.overview.outputTokens)}</span>
-        <span className="text-[12px] text-secondary">输出</span>
+      {/* Two fixed columns: a longer number on the left never pushes the output figure around. */}
+      <div className="grid grid-cols-2 gap-3">
+        <div data-testid="token-input" className="flex min-w-0 items-baseline gap-1.5">
+          <span className="text-[24px] leading-tight font-semibold tracking-tight">{formatTokens(totalIn)}</span>
+          <span className="text-[12px] text-secondary">输入</span>
+        </div>
+        <div data-testid="token-output" className="flex min-w-0 items-baseline gap-1.5">
+          <span className="text-[24px] leading-tight font-semibold tracking-tight">{formatTokens(stats.overview.outputTokens)}</span>
+          <span className="text-[12px] text-secondary">输出</span>
+        </div>
       </div>
       <div
         role="img"
@@ -142,7 +148,7 @@ function TokenCard({ stats }: { stats: Stats }) {
       </div>
       <div className="flex flex-wrap gap-x-3 text-[11px] text-secondary">
         {parts.map((p) => (
-          <span key={p.label} className="flex items-center gap-1 whitespace-nowrap">
+          <span key={p.label} title={p.hint} className="flex cursor-default items-center gap-1 whitespace-nowrap">
             <span className={cn("size-2 rounded-[2px]", p.className)} />
             {p.label} {formatTokens(p.value)}
           </span>
@@ -200,46 +206,11 @@ function Bar({ pct, color, className }: { pct: number; color: string; className?
   );
 }
 
-const WEEKDAY_NAMES = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"];
-const pad = (n: number) => String(n).padStart(2, "0");
 const fmtReset = (d: Date) => format(d, "M月d日 EEE HH:mm", { locale: zhCN });
 
 function remaining(ms: number): string {
   const h = Math.max(0, Math.floor(ms / 3_600_000));
   return h >= 24 ? `${Math.floor(h / 24)} 天 ${h % 24} 小时` : `${h} 小时 ${Math.floor((ms % 3_600_000) / 60_000)} 分`;
-}
-
-/** The weekly cycle's reset setting and its current span. */
-function CycleBar({ start, end }: { start: Date; end: Date }) {
-  const reset = useUi((s) => s.weeklyReset);
-  const setReset = useUi((s) => s.setWeeklyReset);
-  const field = "h-6 rounded-md border border-border bg-ground px-1.5 text-[12px] text-text outline-none focus-visible:ring-2 focus-visible:ring-accent";
-  return (
-    <div data-testid="cycle-bar" className="flex flex-wrap items-center gap-x-2 gap-y-1 pb-2.5 text-[12px] text-secondary">
-      <span>每周</span>
-      <select aria-label="重置日" className={field} value={reset.weekday} onChange={(e) => setReset({ ...reset, weekday: Number(e.target.value) })}>
-        {WEEKDAY_NAMES.map((n, i) => (
-          <option key={n} value={i}>
-            {n}
-          </option>
-        ))}
-      </select>
-      <input
-        type="time"
-        aria-label="重置时间"
-        className={field}
-        value={`${pad(Math.floor(reset.minutes / 60))}:${pad(reset.minutes % 60)}`}
-        onChange={(e) => {
-          const [h, m] = e.target.value.split(":").map(Number);
-          if (Number.isFinite(h) && Number.isFinite(m)) setReset({ ...reset, minutes: h * 60 + m });
-        }}
-      />
-      <span>重置</span>
-      <span data-testid="cycle-span" className="text-text/80">
-        本周期 {fmtReset(start)} 至 {fmtReset(end)}，还剩 {remaining(end.getTime() - Date.now())}
-      </span>
-    </div>
-  );
 }
 
 /** Stats as a large dialog over the window; a click outside or Esc closes it. */
@@ -310,8 +281,12 @@ function StatsPanel() {
         {/* The toolbar row keeps its height; the cycle bar only adds a row below it. */}
         <div className="flex min-h-[52px] flex-wrap items-center gap-3">
           <DialogPrimitive.Title asChild>
-            <h1 className="m-0 flex-1 text-[16px] font-semibold">统计</h1>
+            <h1 className="m-0 shrink-0 text-[16px] font-semibold">统计</h1>
           </DialogPrimitive.Title>
+          {/* Same row whatever the range, so switching to 本周期 moves nothing; the reset is set in Settings. */}
+          <span data-testid="cycle-span" className="min-w-0 flex-1 truncate text-[12px] text-secondary">
+            {cycle && `本周期 ${fmtReset(cycle.start)} 至 ${fmtReset(cycle.end)}，还剩 ${remaining(cycle.end.getTime() - Date.now())}`}
+          </span>
           <Segmented label="时间范围" value={rangeKey} options={RANGES.map((r) => ({ key: r.key, label: r.label }))} onChange={setRangeKey} />
           <DialogPrimitive.Close
             aria-label="关闭统计"
@@ -320,7 +295,6 @@ function StatsPanel() {
             <X size={16} strokeWidth={1.6} aria-hidden />
           </DialogPrimitive.Close>
         </div>
-        {cycle && <CycleBar start={cycle.start} end={cycle.end} />}
       </header>
 
       <div data-testid="stats-scroll" className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto px-6 pt-4 pb-6">
