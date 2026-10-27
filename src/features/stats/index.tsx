@@ -1,24 +1,21 @@
 import { format } from "date-fns";
 import { zhCN } from "date-fns/locale";
-import { Check } from "lucide-react";
-import { DropdownMenu as Dd } from "radix-ui";
-import { type ReactNode, useMemo, useState } from "react";
-import { DropdownMenuContent, DropdownMenu, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
+import { Fragment, type ReactNode, useMemo, useState } from "react";
 import type { Drill, Stats, TimeRange } from "@/ipc/bindings";
 import { useLeadingInset } from "@/features/layout";
 import { cn } from "@/lib/cn";
 import { cycleEnd, cycleStart } from "@/lib/cycle";
 import { formatCost, formatDuration, formatTokens } from "@/lib/format";
-import { useProjects, useStats } from "@/queries";
+import { useStats } from "@/queries";
 import { useUi } from "@/state/ui";
 import { Chart, useDark } from "./Chart";
 import {
   FAMILIES,
   FAMILY_LABEL,
+  IO_SERIES,
   type Metric,
   type ModelFamily,
   family,
-  familyTotals,
   dailyOption,
   heatDayOption,
   heatWeekHourOption,
@@ -103,20 +100,67 @@ function longestStreak(days: string[]): number {
   return best;
 }
 
+const CARD = "flex min-w-0 flex-col gap-0.5 rounded-[10px] border border-border bg-ground px-3.5 py-3";
+
+/** Input (new, cache writes, cache reads) and output; the bar shows what the input was made of. */
+function TokenCard({ stats }: { stats: Stats }) {
+  const t = stats.daily.reduce(
+    (a, d) => ({ input: a.input + d.input, read: a.read + d.cacheRead, write: a.write + d.cacheCreation }),
+    { input: 0, read: 0, write: 0 },
+  );
+  const totalIn = t.input + t.read + t.write;
+  const pct = (v: number) => (totalIn ? (v / totalIn) * 100 : 0);
+  const parts = [
+    { label: "缓存读取", value: t.read, className: "bg-accent" },
+    { label: "缓存写入", value: t.write, className: "bg-accent/45" },
+    { label: "新输入", value: t.input, className: "bg-text/20" },
+  ];
+  return (
+    <div data-testid="stat-card" data-card="tokens" className={cn(CARD, "col-span-2 gap-[5px]")}>
+      <div className="flex items-baseline gap-2">
+        <span className="text-[12px] text-secondary">Token</span>
+        <span className="flex-1" />
+        <span data-testid="cache-hit" className="text-[12px] text-secondary">
+          缓存命中率 <span className="font-semibold text-text">{Math.round(pct(t.read))}%</span>
+        </span>
+      </div>
+      <div className="flex items-baseline gap-2.5">
+        <span className="text-[24px] leading-tight font-semibold tracking-tight">{formatTokens(totalIn)}</span>
+        <span className="text-[12px] text-secondary">输入</span>
+        <span className="ml-1.5 text-[24px] leading-tight font-semibold tracking-tight">{formatTokens(stats.overview.outputTokens)}</span>
+        <span className="text-[12px] text-secondary">输出</span>
+      </div>
+      <div
+        role="img"
+        aria-label={`输入构成：${parts.map((p) => `${p.label} ${Math.round(pct(p.value))}%`).join("，")}`}
+        className="flex h-1.5 overflow-hidden rounded-full bg-border"
+      >
+        {parts.map((p) => (
+          <span key={p.label} className={p.className} style={{ width: `${pct(p.value)}%` }} />
+        ))}
+      </div>
+      <div className="flex flex-wrap gap-x-3 text-[11px] text-secondary">
+        {parts.map((p) => (
+          <span key={p.label} className="flex items-center gap-1 whitespace-nowrap">
+            <span className={cn("size-2 rounded-[2px]", p.className)} />
+            {p.label} {formatTokens(p.value)}
+          </span>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/** A daily average: one decimal below 10, so a quiet range does not read as 0. */
+const perDay = (v: number) => (v < 10 ? String(Math.round(v * 10) / 10) : num(Math.round(v)));
+
 function Overview({ stats, rangeDays }: { stats: Stats; rangeDays: number | null }) {
-  const { overview: o, daily, projects } = stats;
-  const out = familyTotals(daily, "output");
-  const total = FAMILIES.reduce((s, f) => s + out[f], 0);
-  const share = FAMILIES.filter((f) => out[f] > 0)
-    .sort((a, b) => out[b] - out[a])
-    .map((f) => `${FAMILY_LABEL[f]} ${Math.round((out[f] / total) * 100)}%`)
-    .join(" · ");
+  const { overview: o, daily } = stats;
   const activeDays = daily.map((d) => d.day);
   const span = rangeDays ?? Math.max(o.activeDays, stats.heatDaily.length);
   const cards = [
-    { id: "sessions", label: "Session", value: num(o.sessions), sub: `${projects.length} 个 Project` },
+    { id: "sessions", label: "Session", value: num(o.sessions), sub: o.activeDays ? `日均 ${perDay(o.sessions / o.activeDays)} 个` : "—" },
     { id: "messages", label: "消息", value: num(o.messages), sub: o.activeDays ? `日均 ${num(Math.round(o.messages / o.activeDays))} 条` : "—" },
-    { id: "tokens", label: "输出 token", value: formatTokens(o.outputTokens), sub: share || "—" },
     {
       id: "cost",
       label: "API 金额",
@@ -131,58 +175,19 @@ function Overview({ stats, rangeDays }: { stats: Stats; rangeDays: number | null
     },
   ];
   return (
-    <div className="grid grid-cols-2 gap-3 @2xl:grid-cols-3 @5xl:grid-cols-5">
-      {cards.map((c) => (
-        <div key={c.id} data-testid="stat-card" data-card={c.id} className="flex min-w-0 flex-col gap-0.5 rounded-[10px] border border-border bg-ground px-3.5 py-3">
-          <span className="text-[12px] text-secondary">{c.label}</span>
-          <span className="text-[24px] leading-tight font-semibold tracking-tight">{c.value}</span>
-          <span className="truncate text-[11px] text-secondary">{c.sub}</span>
-        </div>
+    <div className="grid grid-cols-2 gap-3 @2xl:grid-cols-4 @5xl:grid-cols-6">
+      {cards.map((c, i) => (
+        <Fragment key={c.id}>
+          {/* Token sits third, after Session and messages. */}
+          {i === 2 && <TokenCard stats={stats} />}
+          <div data-testid="stat-card" data-card={c.id} className={CARD}>
+            <span className="text-[12px] text-secondary">{c.label}</span>
+            <span className="text-[24px] leading-tight font-semibold tracking-tight">{c.value}</span>
+            <span className="truncate text-[11px] text-secondary">{c.sub}</span>
+          </div>
+        </Fragment>
       ))}
     </div>
-  );
-}
-
-function ProjectFilter({ value, onChange }: { value: string[]; onChange: (ids: string[]) => void }) {
-  const { data } = useProjects();
-  const projects = data ?? [];
-  const label = value.length === 0 ? "全部" : value.length === 1 ? (projects.find((p) => p.id === value[0])?.displayName ?? "1 个") : `${value.length} 个`;
-  const toggle = (id: string) => onChange(value.includes(id) ? value.filter((v) => v !== id) : [...value, id]);
-  return (
-    <DropdownMenu>
-      <DropdownMenuTrigger
-        data-testid="stats-project-filter"
-        className="h-7 rounded-md border border-border bg-ground px-2.5 text-[12px] outline-none focus-visible:ring-2 focus-visible:ring-accent"
-      >
-        Project：{label} ▾
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align="end" className="max-h-72 min-w-48 overflow-auto">
-        <Dd.CheckboxItem
-          checked={value.length === 0}
-          onSelect={(e) => {
-            e.preventDefault();
-            onChange([]);
-          }}
-          className="flex cursor-default items-center gap-2 rounded px-2 py-1 text-[13px] outline-none data-[highlighted]:bg-selection"
-        >
-          <span className="w-4">{value.length === 0 && <Check size={14} />}</span>全部
-        </Dd.CheckboxItem>
-        {projects.map((p) => (
-          <Dd.CheckboxItem
-            key={p.id}
-            checked={value.includes(p.id)}
-            onSelect={(e) => {
-              e.preventDefault();
-              toggle(p.id);
-            }}
-            className="flex cursor-default items-center gap-2 rounded px-2 py-1 text-[13px] outline-none data-[highlighted]:bg-selection"
-          >
-            <span className="w-4">{value.includes(p.id) && <Check size={14} />}</span>
-            {p.displayName}
-          </Dd.CheckboxItem>
-        ))}
-      </DropdownMenuContent>
-    </DropdownMenu>
   );
 }
 
@@ -239,11 +244,9 @@ function CycleBar({ start, end }: { start: Date; end: Date }) {
 export function StatsPanel() {
   const dark = useDark();
   const theme = themes[dark ? "dark" : "light"];
-  const storeProjectIds = useUi((s) => s.projectIds);
-  const inset = useLeadingInset("main");
+  const inset = useLeadingInset();
   const [rangeKey, setRangeKey] = useState<RangeKey>("30");
-  const [projectIds, setProjectIds] = useState<string[]>(storeProjectIds);
-  const [metric, setMetric] = useState<Metric>("output");
+  const [metric, setMetric] = useState<Metric>("all");
   const [heat, setHeat] = useState<"day" | "weekHour">("weekHour");
 
   const weeklyReset = useUi((s) => s.weeklyReset);
@@ -257,13 +260,20 @@ export function StatsPanel() {
     () => (cycle ? { fromMs: cycle.start.getTime(), toMs: null } : rangeDays ? { fromMs: Date.now() - rangeDays * DAY, toMs: null } : null),
     [cycle, rangeDays],
   );
-  const { data: stats, isPending, isError } = useStats({ timeRange, projectIds });
+  const { data: stats, isPending, isError } = useStats({ timeRange });
 
-  const drill = (d: Drill | null, ids: string[] = projectIds) => {
+  const drill = (d: Drill) => {
     const ui = useUi.getState();
-    ui.setProjectIds(ids);
+    ui.setProjectIds([]);
     ui.setStatsDrill(d, timeRange);
     ui.selectSession(null);
+    ui.setView("sessions");
+  };
+  const openSession = (id: string) => {
+    const ui = useUi.getState();
+    ui.setProjectIds([]);
+    ui.setStatsDrill(null);
+    ui.selectSession(id);
     ui.setView("sessions");
   };
 
@@ -275,9 +285,8 @@ export function StatsPanel() {
 
   const empty = stats != null && stats.overview.sessions === 0 && stats.daily.length === 0;
   const present = stats ? FAMILIES.filter((f) => stats.daily.some((d) => family(d.model) === f)) : [];
-  const maxProj = Math.max(0.01, ...(stats?.projects.map((p) => p.cost) ?? []));
+  const maxCost = Math.max(0.01, ...(stats?.sessions.map((s) => s.cost) ?? []));
   const maxTool = Math.max(1, ...(stats?.tools.map((t) => t.calls) ?? []));
-  const projects = stats ? [...stats.projects].sort((a, b) => b.cost - a.cost || b.outputTokens - a.outputTokens) : [];
   const tools = stats ? [...stats.tools].sort((a, b) => b.calls - a.calls) : [];
   const agents = stats ? [...stats.subagents].sort((a, b) => b.runs - a.runs) : [];
 
@@ -289,7 +298,6 @@ export function StatsPanel() {
         <div data-tauri-drag-region="deep" className="flex min-h-[52px] flex-wrap items-center gap-3">
           <h1 className="m-0 flex-1 text-[16px] font-semibold">统计</h1>
           <Segmented label="时间范围" value={rangeKey} options={RANGES.map((r) => ({ key: r.key, label: r.label }))} onChange={setRangeKey} />
-          <ProjectFilter value={projectIds} onChange={setProjectIds} />
         </div>
         {cycle && <CycleBar start={cycle.start} end={cycle.end} />}
       </header>
@@ -306,11 +314,19 @@ export function StatsPanel() {
             <div className="grid grid-cols-1 items-start gap-3 @3xl:grid-cols-3">
               <Card
                 className="@3xl:col-span-2"
-                title="每日 token · 按模型"
+                title={metric === "all" ? "每日 token" : "每日 token · 按模型"}
                 testId="stats-daily"
                 aside={
                   <>
-                    {present.map((f) => (
+                    {metric === "all" &&
+                      IO_SERIES.map((s) => (
+                        <span key={s.label} className="flex items-center gap-1 text-[11px]">
+                          <span className="size-[9px] rounded-[2px]" style={{ background: theme[s.color] }} />
+                          {s.label}
+                        </span>
+                      ))}
+                    {metric !== "all" &&
+                      present.map((f) => (
                       <button
                         key={f}
                         type="button"
@@ -322,14 +338,15 @@ export function StatsPanel() {
                         <span className="size-[9px] rounded-[2px]" style={{ background: theme.series[f as ModelFamily] }} />
                         {FAMILY_LABEL[f]}
                       </button>
-                    ))}
+                      ))}
                     <Segmented
                       small
                       label="指标"
                       value={metric}
                       options={[
+                        { key: "all", label: "全部" },
+                        { key: "input", label: "输入" },
                         { key: "output", label: "输出" },
-                        { key: "input", label: "输入（含缓存）" },
                       ]}
                       onChange={setMetric}
                     />
@@ -349,23 +366,24 @@ export function StatsPanel() {
                 )}
               </Card>
 
-              <Card title="Project 排行" aside={<span className="text-[11px] text-secondary">按 API 金额</span>}>
-                {projects.length === 0 && <Empty />}
-                {projects.slice(0, 8).map((p) => (
+              <Card title="Session 排行" aside={<span className="text-[11px] text-secondary">按 API 金额</span>}>
+                {stats.sessions.length === 0 && <Empty />}
+                {stats.sessions.map((s) => (
                   <button
-                    key={p.projectId}
+                    key={s.sessionId}
                     type="button"
-                    data-testid="project-rank-row"
-                    onClick={() => drill(null, [p.projectId])}
+                    data-testid="session-rank-row"
+                    title={s.title}
+                    onClick={() => openSession(s.sessionId)}
                     className="flex flex-col gap-[3px] rounded text-left outline-none hover:bg-code focus-visible:ring-2 focus-visible:ring-accent"
                   >
-                    <span className="flex text-[12px]">
-                      <span className="flex-1 truncate">{p.displayName}</span>
-                      <span className="text-secondary tabular-nums">
-                        {formatCost(p.cost)} · {formatTokens(p.outputTokens)}
+                    <span className="flex gap-2 text-[12px]">
+                      <span className="min-w-0 flex-1 truncate">{s.title}</span>
+                      <span className="shrink-0 text-secondary tabular-nums">
+                        {formatCost(s.cost)} · {formatTokens(s.outputTokens)}
                       </span>
                     </span>
-                    <Bar pct={(p.cost / maxProj) * 100} color={theme.series.opus} />
+                    <Bar pct={(s.cost / maxCost) * 100} color={theme.series.opus} />
                   </button>
                 ))}
               </Card>

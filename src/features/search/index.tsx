@@ -180,7 +180,7 @@ function HitRow({ value, hit, disabled, onOpen }: { value: string; hit: SearchHi
 }
 
 /**
- * ⌘K / ⌘P: one dialog for Projects (pick to filter the Session list, ⌘↵ to search only it), Sessions
+ * ⌘K: one dialog for Projects (pick to filter the Session list, ⌘↵ to search only it), Sessions
  * (title, Project, branch; matched here, instantly) and conversation content (full-text index, debounced).
  * Later sections only append below, so the selection never jumps.
  */
@@ -189,7 +189,6 @@ export function SearchOverlay() {
   const setOpen = useUi((s) => s.setSearchOpen);
   const toggle = () => setOpen(!useUi.getState().searchOpen);
   useHotkey("Meta+K", toggle, { enableInInputs: true });
-  useHotkey("Meta+P", toggle, { enableInInputs: true });
 
   const [input, setInput] = useState("");
   // IME composition (e.g. pinyin) puts unconfirmed text in the input; match only confirmed text.
@@ -530,7 +529,7 @@ export function SearchOverlay() {
                   <span>-词 排除</span>
                 </>
               )}
-              <span className="ml-auto">⌘K / ⌘P 打开或关闭</span>
+              <span className="ml-auto">⌘K 打开或关闭</span>
             </div>
           </Command>
         </DialogPrimitive.Content>

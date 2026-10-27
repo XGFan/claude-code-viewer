@@ -462,22 +462,27 @@ function getStats(req: StatsRequest): Stats {
     const ms = new Date(`${day}T12:00:00`).getTime();
     return (from == null || ms >= from - DAY / 2) && (to == null || ms <= to + DAY / 2);
   };
-  const projectsStat = req.projectIds.length ? statsSeed.projects.filter((p) => req.projectIds.includes(p.projectId)) : statsSeed.projects;
   const daily = statsSeed.daily.filter((d) => inRange(d.day));
-  const messages = projectsStat.reduce((s, p) => s + p.messages, 0);
+  const ranked = sessionData
+    .map((d) => summaryOf(d.summary.id))
+    .filter((s) => s.messageCount > 0)
+    .sort((a, b) => b.cost - a.cost)
+    .slice(0, 10)
+    .map((s) => ({ sessionId: s.id, title: s.title, messages: s.messageCount, outputTokens: s.tokens.output, cost: s.cost }));
   return {
     ...statsSeed,
+    // Fixed totals: the seeded charts are not derived from the mock sessions.
     overview: {
-      sessions: projectsStat.reduce((s, p) => s + p.sessions, 0),
-      messages,
+      sessions: 10,
+      messages: 1286,
       outputTokens: daily.reduce((s, d) => s + d.output, 0),
       activeDays: new Set(daily.map((d) => d.day)).size,
-      cost: projectsStat.reduce((s, p) => s + p.cost, 0),
+      cost: 412.37,
       unpricedMessages: 0,
     },
     daily,
     heatDaily: statsSeed.heatDaily.filter((d) => inRange(d.day)),
-    projects: projectsStat,
+    sessions: ranked,
   };
 }
 

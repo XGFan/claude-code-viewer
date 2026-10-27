@@ -9,10 +9,17 @@ test("统计面板渲染卡片与图表", async ({ page }) => {
   await expect(page.getByTestId("stat-card")).toHaveCount(5);
   await expect(page.locator('[data-card="sessions"]')).toContainText("10");
   await expect(page.locator('[data-card="cost"]')).toContainText("$412.37");
+  const tokens = page.locator('[data-card="tokens"]');
+  await expect(tokens).toContainText("输入");
+  await expect(tokens).toContainText("输出");
+  await expect(tokens.getByTestId("cache-hit")).toHaveText(/缓存命中率 \d+%/);
+  await expect(tokens.getByRole("img", { name: /输入构成：缓存读取 \d+%/ })).toBeVisible();
   await expect(page.getByTestId("daily-chart").locator("canvas").first()).toBeVisible();
   await expect(page.getByTestId("heat-chart").locator("canvas").first()).toBeVisible();
-  await expect(page.getByTestId("project-rank-row")).toHaveCount(3);
-  await expect(page.getByTestId("project-rank-row").first()).toContainText("$236.40");
+  const ranks = page.getByTestId("session-rank-row");
+  await expect(ranks.first()).toBeVisible();
+  expect(await ranks.count()).toBeLessThanOrEqual(10);
+  await expect(page.locator('[data-card="sessions"]')).not.toContainText("Project");
   await expect(page.getByTestId("tool-row").filter({ hasText: "Bash" })).toHaveAttribute("data-high-failure", "true");
   await expect(page.getByTestId("agent-row").first()).toContainText("Explore");
 
@@ -22,13 +29,32 @@ test("统计面板渲染卡片与图表", async ({ page }) => {
   await expect(page.getByTestId("stat-card")).toHaveCount(5);
 });
 
-test("点击 Project 排行跳到被过滤的会话列表", async ({ page }) => {
+test("Session 排行按金额倒序，点击打开该 Session", async ({ page }) => {
   await page.goto("/");
   await page.getByTestId("nav-stats").click();
-  await page.getByTestId("project-rank-row").filter({ hasText: "orbit-web" }).click();
+  await expect(page.getByTestId("stats-project-filter")).toHaveCount(0);
+  const ranks = page.getByTestId("session-rank-row");
+  const costs = await ranks.evaluateAll((rows) => rows.map((r) => Number(/\$([\d,.]+)/.exec(r.textContent ?? "")![1]!.replace(/,/g, ""))));
+  expect(costs).toEqual([...costs].sort((a, b) => b - a));
+  const title = (await ranks.first().getAttribute("title"))!;
+  await ranks.first().click();
   await expect(page.getByTestId("stats")).toHaveCount(0);
-  await expect(page.getByTestId("session-row").filter({ hasText: "迁移表单校验到 zod" })).toBeVisible();
-  await expect(page.getByTestId("session-row").filter({ hasText: "为 /v1/chat 接口增加令牌桶限流中间件" })).toHaveCount(0);
+  await expect(page.getByTestId("header").getByRole("heading", { name: title })).toBeVisible();
+});
+
+test("每日 token 可在全部、输入、输出间切换：全部为输入、输出两根柱子，其余按模型", async ({ page }) => {
+  await page.goto("/");
+  await page.getByTestId("nav-stats").click();
+  const daily = page.getByTestId("stats-daily");
+  await expect(daily).toContainText("每日 token");
+  await expect(daily).not.toContainText("按模型");
+  await expect(daily).not.toContainText("含缓存");
+  await expect(daily.getByTestId("legend-item")).toHaveCount(0);
+  await daily.getByRole("button", { name: "输出", exact: true }).click();
+  await expect(daily).toContainText("按模型");
+  await expect(daily.getByTestId("legend-item").first()).toBeVisible();
+  await daily.getByRole("button", { name: "全部" }).click();
+  await expect(daily.getByTestId("legend-item")).toHaveCount(0);
 });
 
 test("点击工具行按 tool 下钻会话列表", async ({ page }) => {
@@ -87,7 +113,7 @@ test("窗口变高时图表不随之拉高", async ({ page }) => {
   expect(before[0]).toBeLessThanOrEqual(260);
 });
 
-test("滚动统计内容时，标题、时间范围与 Project 筛选固定不动", async ({ page }) => {
+test("滚动统计内容时，标题与时间范围固定不动", async ({ page }) => {
   await page.setViewportSize({ width: 1400, height: 620 });
   await page.goto("/");
   await page.getByTestId("nav-stats").click();

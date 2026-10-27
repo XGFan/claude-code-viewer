@@ -1,6 +1,5 @@
 import type { AppInfo, Diagnostics, IndexStatus, Stats } from "@/ipc/bindings";
 import { DAY, NOW } from "./builders";
-import { HOMELAB, LUMEN, ORBIT } from "./projects";
 
 export const appInfo = {
   version: "0.1.0",
@@ -79,11 +78,8 @@ export const stats = {
     hour: i % 24,
     messages: i % 24 >= 9 && i % 24 <= 22 ? Math.round(rnd(i + 11) * 60) : Math.round(rnd(i + 11) * 5),
   })),
-  projects: [
-    { projectId: LUMEN, displayName: "lumen-api", sessions: 4, messages: 612, outputTokens: 2_140_000, cost: 236.4 },
-    { projectId: ORBIT, displayName: "orbit-web", sessions: 4, messages: 488, outputTokens: 1_310_000, cost: 141.82 },
-    { projectId: HOMELAB, displayName: "homelab-infra", sessions: 2, messages: 186, outputTokens: 520_000, cost: 34.15 },
-  ],
+  // Filled from the mock sessions by `getStats`.
+  sessions: [],
   tools: [
     { name: "Bash", calls: 1240, failures: 118 },
     { name: "Read", calls: 980, failures: 4 },

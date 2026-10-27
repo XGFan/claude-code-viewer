@@ -1,16 +1,15 @@
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { ChevronDown, Folder, GitBranch, X } from "lucide-react";
+import { ArrowDown, ArrowUp, Folder, GitBranch, X } from "lucide-react";
 import { useMemo, useRef, type KeyboardEvent } from "react";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import type { Drill, ProjectSummary, SessionSort, SessionSummary } from "@/ipc/bindings";
-import { useLeadingInset } from "@/features/layout";
-import { sessionProjectIds } from "@/features/search/match";
 import { cn } from "@/lib/cn";
 import { formatCost, formatRelative, formatTokens } from "@/lib/format";
 import { useProjects, useSessionList } from "@/queries";
 import { useUi } from "@/state/ui";
 
 const ROW_HEIGHT = 60;
+const nf = new Intl.NumberFormat("en-US");
 
 const SORTS: { value: SessionSort; menu: string; order: string }[] = [
   { value: "lastActive", menu: "时间", order: "时间" },
@@ -30,11 +29,9 @@ export function SessionList() {
   const sort = useUi((s) => s.sessionSort);
   const descending = useUi((s) => s.sessionDescending);
   const setSort = useUi((s) => s.setSessionSort);
-  const inset = useLeadingInset("sessions");
   const drill = useUi((s) => s.statsDrill);
   const setDrill = useUi((s) => s.setStatsDrill);
   const setProjectIds = useUi((s) => s.setProjectIds);
-  const setSearchOpen = useUi((s) => s.setSearchOpen);
 
   const list = data ?? [];
   const names = useMemo(() => new Map((projects ?? []).map((p: ProjectSummary) => [p.id, p.displayName])), [projects]);
@@ -47,8 +44,6 @@ export function SessionList() {
   });
 
   const sortInfo = SORTS.find((s) => s.value === sort)!;
-  const title = projectIds.length === 1 ? (names.get(projectIds[0]!) ?? "Session") : "全部 Session";
-  const liveCount = list.filter((s) => s.live).length;
 
   const open = (id: string) => {
     selectSession(id);
@@ -67,30 +62,38 @@ export function SessionList() {
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <div data-tauri-drag-region="deep" className={cn("flex h-[52px] shrink-0 items-center gap-2 border-b border-border px-3.5", inset)}>
-        <div className="min-w-0 flex-1">
-          <button
-            type="button"
-            data-testid="list-title"
-            title="搜索（⌘K / ⌘P）"
-            onClick={() => setSearchOpen(true)}
-            className="flex max-w-full items-center gap-1 rounded text-[14px] font-semibold outline-none focus-visible:outline-2 focus-visible:outline-accent"
-          >
-            <span className="truncate">{title}</span>
-            <ChevronDown size={12} strokeWidth={1.8} className="shrink-0 text-secondary" aria-hidden />
-          </button>
-          <div className="truncate text-[11px] text-secondary">
-            {liveCount} 个进行中 · 按{sortInfo.order}
-            {descending ? "倒序" : "正序"}
-          </div>
-        </div>
+      {/* The toolbar (list toggle, search) floats in this strip, right after the traffic lights. */}
+      <div data-tauri-drag-region="deep" className="h-10 shrink-0" />
+      <div
+        data-tauri-drag-region="deep"
+        className="flex h-[30px] shrink-0 items-center gap-1.5 border-b border-border pr-2 pl-4 text-[12px] text-secondary"
+      >
+        {projectIds.length > 0 ? (
+          <span data-testid="project-chip" className="flex h-5 min-w-0 items-center gap-1 rounded-[5px] bg-selection pr-0.5 pl-1.5 font-semibold text-accent">
+            <Folder size={12} strokeWidth={1.8} className="shrink-0" aria-hidden />
+            <span data-testid="list-title" className="truncate">
+              {projectIds.map((id) => names.get(id) ?? id).join("、")}
+            </span>
+            <button type="button" aria-label="清除 Project 筛选" onClick={() => setProjectIds([])} className="rounded-full p-0.5 hover:bg-black/10">
+              <X size={11} strokeWidth={2} aria-hidden />
+            </button>
+          </span>
+        ) : (
+          <span data-testid="list-title" className="font-semibold text-text">
+            全部 Session
+          </span>
+        )}
+        <span data-testid="list-count" className="shrink-0 tabular-nums">
+          {nf.format(list.length)}
+        </span>
+        <span className="flex-1" />
         <DropdownMenu>
           <DropdownMenuTrigger
             aria-label="排序方式"
-            className="flex h-7 items-center gap-1 rounded-md border border-border bg-ground px-2 text-[12px] text-text/80 outline-none focus-visible:outline-2 focus-visible:outline-accent"
+            className="flex h-[22px] shrink-0 items-center gap-0.5 rounded-md px-1.5 text-[12px] text-secondary outline-none hover:bg-text/8 focus-visible:outline-2 focus-visible:outline-accent"
           >
-            {sortInfo.menu}
-            <ChevronDown size={11} strokeWidth={1.8} aria-hidden />
+            按{sortInfo.menu}
+            {descending ? <ArrowDown size={11} strokeWidth={2} aria-hidden /> : <ArrowUp size={11} strokeWidth={2} aria-hidden />}
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end">
             {SORTS.map((s) => (
@@ -107,20 +110,12 @@ export function SessionList() {
           </DropdownMenuContent>
         </DropdownMenu>
       </div>
-      {(drill || projectIds.length > 0) && (
+      {drill && (
         <div className="flex shrink-0 flex-wrap items-center gap-2 border-b border-border px-3.5 py-1.5 text-[12px]">
           <span className="text-secondary">筛选</span>
-          {projectIds.length > 0 && (
-            <FilterChip testId="project-chip" label="清除 Project 筛选" onClear={() => setProjectIds([])}>
-              <Folder size={11} strokeWidth={1.8} className="shrink-0" aria-hidden />
-              <span className="truncate">{projectIds.map((id) => names.get(id) ?? id).join("、")}</span>
-            </FilterChip>
-          )}
-          {drill && (
-            <FilterChip testId="drill-chip" label="清除筛选" onClear={() => setDrill(null)}>
-              <span className="truncate">{drillLabel(drill)}</span>
-            </FilterChip>
-          )}
+          <FilterChip testId="drill-chip" label="清除筛选" onClear={() => setDrill(null)}>
+            <span className="truncate">{drillLabel(drill)}</span>
+          </FilterChip>
         </div>
       )}
       <div
@@ -143,9 +138,6 @@ export function SessionList() {
                 <SessionRow
                   s={s}
                   selected={s.id === sessionId}
-                  projectNames={sessionProjectIds(s)
-                    .filter((id) => !projectIds.includes(id))
-                    .map((id) => names.get(id) ?? id)}
                   byCreated={sort === "created"}
                   onOpen={open}
                 />
@@ -173,14 +165,12 @@ function FilterChip({ testId, label, onClear, children }: { testId: string; labe
 function SessionRow({
   s,
   selected,
-  projectNames,
   byCreated,
   onOpen,
 }: {
   s: SessionSummary;
   selected: boolean;
-  /** Projects it started in or edited, minus those the list is filtered by. */
-  projectNames: string[];
+
   byCreated: boolean;
   onOpen: (id: string) => void;
 }) {
@@ -213,11 +203,6 @@ function SessionRow({
         <span className="shrink-0 text-[11px] text-secondary">{formatRelative(byCreated ? s.createdMs : s.lastActiveMs)}</span>
       </div>
       <div className="flex items-center gap-2.5 text-[11px] text-secondary">
-        {projectNames.length > 0 && (
-          <span data-testid="row-projects" className="max-w-[45%] shrink-0 truncate text-text/80">
-            {projectNames.join(" · ")}
-          </span>
-        )}
         {s.gitBranch && (
           <span className="flex min-w-0 items-center gap-[3px]">
             <GitBranch size={11} strokeWidth={1.5} className="shrink-0" aria-hidden />

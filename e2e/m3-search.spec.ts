@@ -3,10 +3,10 @@ import { composeEnd, composeStart, escWhileComposing, queriesOf } from "./ime";
 
 const RICH_TITLE = "为 /v1/chat 接口增加令牌桶限流中间件";
 
-async function openSearch(page: Page, key = "Meta+k") {
+async function openSearch(page: Page) {
   await page.goto("/");
   await expect(page.getByTestId("session-row").first()).toBeVisible();
-  await page.keyboard.press(key);
+  await page.keyboard.press("Meta+k");
   await expect(page.getByTestId("search")).toBeVisible();
 }
 
@@ -14,13 +14,15 @@ const input = (page: Page) => page.locator("[cmdk-input]");
 const sessions = (page: Page) => page.getByTestId("search-session");
 const selected = (page: Page) => page.locator('[data-testid="search"] [cmdk-item][data-selected="true"]');
 
-test("⌘K 与 ⌘P 打开同一个弹窗，空输入列出最近的 Session，再按一次关闭", async ({ page }) => {
-  await openSearch(page, "Meta+p");
+test("⌘K 打开，空输入列出最近的 Session，再按一次关闭；⌘P 不再打开", async ({ page }) => {
+  await openSearch(page);
   await expect(sessions(page).first()).toContainText(RICH_TITLE);
   await expect(page.getByTestId("search-group")).toHaveCount(0);
   await page.keyboard.press("Meta+k");
   await expect(page.getByTestId("search")).toBeHidden();
-  await page.getByTestId("list-title").click();
+  await page.keyboard.press("Meta+p");
+  await expect(page.getByTestId("search")).toBeHidden();
+  await page.getByTestId("search-button").click();
   await expect(page.getByTestId("search")).toBeVisible();
 });
 
@@ -76,7 +78,7 @@ test("Enter 打开 Session；不在当前 Project 筛选里时清除筛选", asy
   await expect(selected(page)).toHaveAttribute("data-testid", "search-project");
   await page.keyboard.press("Enter");
   await expect(page.getByTestId("project-chip")).toContainText("orbit-web");
-  await page.keyboard.press("Meta+p");
+  await page.keyboard.press("Meta+k");
   await input(page).fill("redis-leak");
   await expect(sessions(page)).toHaveText([/排查 Redis 连接池泄漏/]);
   await page.keyboard.press("Enter");

@@ -12,6 +12,8 @@ export interface Theme {
   tooltipBg: string;
   ramp: string[];
   series: Record<ModelFamily, string>;
+  ioInput: string;
+  ioOutput: string;
 }
 export type ModelFamily = "opus" | "sonnet" | "haiku" | "other";
 export const FAMILIES: ModelFamily[] = ["opus", "sonnet", "haiku", "other"];
@@ -26,6 +28,8 @@ export const themes: Record<"light" | "dark", Theme> = {
     tooltipBg: "#ffffff",
     ramp: ["#ebeae6", "#cde2fb", "#86b6ef", "#3987e5", "#1c5cab", "#104281"],
     series: { opus: "#2a78d6", sonnet: "#eb6834", haiku: "#1baf7a", other: "#4a3aa7" },
+    ioInput: "#86b6ef",
+    ioOutput: "#1c5cab",
   },
   dark: {
     surface: "#1e1e20",
@@ -36,6 +40,8 @@ export const themes: Record<"light" | "dark", Theme> = {
     tooltipBg: "#2c2c2f",
     ramp: ["#2c2c2a", "#184f95", "#256abf", "#3987e5", "#6da7ec", "#b7d3f6"],
     series: { opus: "#3987e5", sonnet: "#d95926", haiku: "#199e70", other: "#9085e9" },
+    ioInput: "#256abf",
+    ioOutput: "#b7d3f6",
   },
 };
 
@@ -46,9 +52,17 @@ export function family(model: string): ModelFamily {
   return m.includes("opus") ? "opus" : m.includes("sonnet") ? "sonnet" : m.includes("haiku") ? "haiku" : "other";
 }
 
-export type Metric = "output" | "input";
+export type Metric = "all" | "input" | "output";
 
-const metricValue = (d: DailyModelTokens, m: Metric) => (m === "output" ? d.output : d.input + d.cacheRead + d.cacheCreation);
+/** Input counts everything the model read: new input plus cache reads and writes. */
+const inputOf = (d: DailyModelTokens) => d.input + d.cacheRead + d.cacheCreation;
+const metricValue = (d: DailyModelTokens, m: Metric) => (m === "output" ? d.output : m === "input" ? inputOf(d) : inputOf(d) + d.output);
+
+/** The two bars per day of the "all" view; `color` is a theme key. */
+export const IO_SERIES = [
+  { label: "输入", color: "ioInput", value: inputOf },
+  { label: "输出", color: "ioOutput", value: (d: DailyModelTokens) => d.output },
+] as const;
 
 export function parseDay(day: string): Date {
   const [y, m, d] = day.split("-").map(Number);
@@ -72,12 +86,6 @@ export function fillDays(days: string[]): string[] {
   return out;
 }
 
-export function familyTotals(daily: DailyModelTokens[], metric: Metric): Record<ModelFamily, number> {
-  const t: Record<ModelFamily, number> = { opus: 0, sonnet: 0, haiku: 0, other: 0 };
-  for (const d of daily) t[family(d.model)] += metricValue(d, metric);
-  return t;
-}
-
 const base = (t: Theme) => ({
   animation: false,
   textStyle: { color: t.ink, fontFamily: "inherit", fontSize: 10 },
@@ -93,22 +101,34 @@ const base = (t: Theme) => ({
 export function dailyOption(daily: DailyModelTokens[], metric: Metric, t: Theme): ChartOption {
   const days = fillDays([...new Set(daily.map((d) => d.day))].sort());
   const present = FAMILIES.filter((f) => daily.some((d) => family(d.model) === f));
-  const series = present.map((f, i) => ({
-    name: FAMILY_LABEL[f],
-    type: "bar",
-    stack: "t",
-    barMaxWidth: 16,
-    itemStyle: {
-      color: t.series[f],
-      borderColor: t.surface,
-      borderWidth: 1,
-      borderRadius: i === present.length - 1 ? [4, 4, 0, 0] : 0,
-    },
-    emphasis: { focus: "series" },
-    data: days.map((day) =>
-      daily.filter((d) => d.day === day && family(d.model) === f).reduce((s, d) => s + metricValue(d, metric), 0),
-    ),
-  }));
+  // "all": input and output side by side; otherwise one bar per day stacked by model family.
+  const series =
+    metric === "all"
+      ? IO_SERIES.map((s) => ({
+          name: s.label,
+          type: "bar",
+          barMaxWidth: 10,
+          barGap: "15%",
+          itemStyle: { color: t[s.color], borderRadius: [3, 3, 0, 0] },
+          emphasis: { focus: "series" },
+          data: days.map((day) => daily.filter((d) => d.day === day).reduce((sum, d) => sum + s.value(d), 0)),
+        }))
+      : present.map((f, i) => ({
+          name: FAMILY_LABEL[f],
+          type: "bar",
+          stack: "t",
+          barMaxWidth: 16,
+          itemStyle: {
+            color: t.series[f],
+            borderColor: t.surface,
+            borderWidth: 1,
+            borderRadius: i === present.length - 1 ? [4, 4, 0, 0] : 0,
+          },
+          emphasis: { focus: "series" },
+          data: days.map((day) =>
+            daily.filter((d) => d.day === day && family(d.model) === f).reduce((s, d) => s + metricValue(d, metric), 0),
+          ),
+        }));
   return {
     ...base(t),
     grid: { left: 40, right: 8, top: 8, bottom: 22 },

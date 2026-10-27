@@ -418,28 +418,26 @@ fn totals_match_oracle() {
         "durations come from first/last message"
     );
 
-    // Project ranking: lumen-api holds basic + persisted.
-    let lumen = st
-        .projects
+    // Session ranking: most expensive first, at most TOP_SESSIONS, each with its own numbers.
+    assert!(st.sessions.len() <= cv_core::stats::TOP_SESSIONS);
+    assert!(st.sessions.windows(2).all(|w| w[0].cost >= w[1].cost));
+    let basic = st
+        .sessions
         .iter()
-        .find(|p| p.display_name.contains("lumen-api"))
-        .expect("lumen-api project");
-    assert_eq!(lumen.sessions, 2);
-    let lumen_msgs = o.sessions[ids::BASIC].msgs.len() + o.sessions[ids::PERSISTED].msgs.len();
-    assert_eq!(lumen.messages as usize, lumen_msgs);
-    assert_eq!(lumen.output_tokens, (5151 + 1527) as f64);
-    assert_eq!(
-        st.projects.iter().map(|p| p.sessions).sum::<u32>(),
-        st.overview.sessions
-    );
-    assert_eq!(
-        st.projects.iter().map(|p| p.output_tokens).sum::<f64>(),
-        st.overview.output_tokens
-    );
+        .find(|s| s.session_id == ids::BASIC)
+        .expect("basic ranked");
+    assert_eq!(basic.messages as usize, o.sessions[ids::BASIC].msgs.len());
+    let basic_out: i64 = o.sessions[ids::BASIC]
+        .msgs
+        .iter()
+        .map(|m| m.tokens[1])
+        .sum();
+    assert_eq!(basic.output_tokens, basic_out as f64);
+    assert!(!basic.title.is_empty());
 }
 
 #[test]
-fn time_range_and_project_filters() {
+fn time_range_filter() {
     let env = scanned(MIXED);
     // 2026-06-09 UTC: only the subagents session's main file and its orphan agent.
     let from = DateTime::parse_from_rfc3339("2026-06-09T00:00:00Z")
@@ -454,7 +452,6 @@ fn time_range_and_project_filters() {
         .engine
         .stats(&StatsRequest {
             time_range: Some(range.clone()),
-            project_ids: vec![],
         })
         .unwrap();
     let s = &env.oracle.sessions[ids::SUBAGENTS];
@@ -466,7 +463,8 @@ fn time_range_and_project_filters() {
     );
     let out: i64 = s.msgs.iter().filter(in_range).map(|m| m.tokens[1]).sum();
     assert_eq!(st.overview.output_tokens, out as f64);
-    assert_eq!(st.projects.len(), 1);
+    assert_eq!(st.sessions.len(), 1);
+    assert_eq!(st.sessions[0].session_id, ids::SUBAGENTS);
     // Only the orphan run starts on that day.
     assert_eq!(st.subagents.len(), 1);
     assert_eq!(st.subagents[0].runs, 1);
@@ -479,26 +477,6 @@ fn time_range_and_project_filters() {
         st.tools.iter().map(|t| t.calls as usize).sum::<usize>(),
         tools
     );
-
-    // Project filter.
-    let project = env
-        .engine
-        .list_sessions(&SessionQuery::default())
-        .unwrap()
-        .into_iter()
-        .find(|x| x.id == ids::BRANCH)
-        .unwrap()
-        .project_id;
-    let st = env
-        .engine
-        .stats(&StatsRequest {
-            time_range: None,
-            project_ids: vec![project],
-        })
-        .unwrap();
-    assert_eq!(st.overview.sessions, 1);
-    assert_eq!(st.overview.output_tokens, 804.0);
-    assert_eq!(st.overview.messages, 15);
 }
 
 /// Child half of `local_day_follows_tz`: prints the heat-map days under the inherited `TZ`.
@@ -649,7 +627,6 @@ fn drill_down_respects_the_time_range() {
         .engine
         .stats(&StatsRequest {
             time_range: range.clone(),
-            project_ids: vec![],
         })
         .unwrap();
     assert_eq!(st.overview.messages, 0);

@@ -2,14 +2,14 @@
 //!
 //! Semantics (each chart dimension has a [`Drill`](crate::model::Drill) in `index::reader` that
 //! returns exactly the contributing sessions):
-//! - Scope: non-empty sessions, optionally restricted to `project_ids`; the time range applies
+//! - Scope: non-empty sessions; the time range applies
 //!   to each row's own timestamp (`messages.ts_ms`, `tool_calls.ts_ms`, `subagents.started_ms`),
 //!   both bounds inclusive.
 //! - `overview.messages`, `heat_daily`, `heat_week_hour`, `overview.sessions`,
-//!   `overview.active_days` and the project `sessions` / `messages`: main-file messages only
+//!   `overview.active_days` and the ranked sessions' `messages`: main-file messages only
 //!   (human/command prompts + assistant messages by `message.id`, as `message_count`).
-//! - Tokens (`overview.output_tokens`, `daily`, project `output_tokens`) and cost
-//!   (`overview.cost`, project `cost`, see `pricing`): main + subagent messages, each billed
+//! - Tokens (`overview.output_tokens`, `daily`, session `output_tokens`) and cost
+//!   (`overview.cost`, session `cost`, see `pricing`): main + subagent messages, each billed
 //!   once (`messages.billed`, see `writer::rebill`); `daily` skips messages without tokens
 //!   (prompts, `<synthetic>` errors).
 //! - `tools`: main + subagent tool calls (a Subagent's tool use is still the user's tool use);
@@ -25,10 +25,9 @@ use rusqlite::types::Value;
 use rusqlite::{Connection, params_from_iter};
 
 use crate::error::CoreResult;
-use crate::index::reader;
 use crate::index::schema::MSG_ASSISTANT;
 use crate::model::{
-    AgentTypeStat, DailyModelTokens, DayCount, ProjectStat, Stats, StatsOverview, StatsRequest,
+    AgentTypeStat, DailyModelTokens, DayCount, SessionStat, Stats, StatsOverview, StatsRequest,
     TimeRange, ToolStat, WeekHourCount,
 };
 
@@ -51,61 +50,35 @@ pub(crate) fn range_bounds(r: Option<&TimeRange>) -> (i64, i64) {
     (from, to)
 }
 
-/// `AND <s started in or edited one of the request's projects>` (appends the arguments).
-fn project_filter(ids: &[String], args: &mut Vec<Value>) -> String {
-    if ids.is_empty() {
-        return String::new();
-    }
-    format!(" AND {}", reader::project_match(ids, args))
-}
-
 /// Ids of the sessions in scope, as a subquery (a hashed `IN` list is much cheaper than a
 /// per-row join on 100k+ tool calls).
-fn scope_subquery(ids: &[String], args: &mut Vec<Value>) -> String {
-    format!(
-        "(SELECT s.id FROM sessions s WHERE s.is_empty = 0{})",
-        project_filter(ids, args)
-    )
-}
+const SCOPE: &str = "(SELECT s.id FROM sessions s WHERE s.is_empty = 0)";
+
+/// Length of the session ranking.
+pub const TOP_SESSIONS: usize = 10;
 
 pub fn compute(conn: &Connection, r: &StatsRequest) -> CoreResult<Stats> {
     let (from, to) = range_bounds(r.time_range.as_ref());
     let ranged = r.time_range.is_some();
 
-    // Sessions in scope → (session index, project index).
-    let mut args = Vec::new();
-    let sql = format!(
-        "SELECT s.id, s.project_id, coalesce(p.display_name, s.project_id)
-         FROM sessions s LEFT JOIN projects p ON p.id = s.project_id
-         WHERE s.is_empty = 0{}",
-        project_filter(&r.project_ids, &mut args)
-    );
-    let mut sessions: HashMap<String, (usize, usize)> = HashMap::new();
-    let mut projects: Vec<(String, String)> = Vec::new();
-    let mut project_index: HashMap<String, usize> = HashMap::new();
+    // Sessions in scope → index, with their titles.
+    let mut sessions: HashMap<String, usize> = HashMap::new();
+    let mut titles: Vec<(String, String)> = Vec::new();
     {
-        let mut st = conn.prepare(&sql)?;
-        let mut rows = st.query(params_from_iter(args))?;
+        let mut st = conn.prepare("SELECT id, title FROM sessions WHERE is_empty = 0")?;
+        let mut rows = st.query([])?;
         while let Some(row) = rows.next()? {
-            let pid: String = row.get(1)?;
-            let pi = match project_index.get(&pid) {
-                Some(&i) => i,
-                None => {
-                    project_index.insert(pid.clone(), projects.len());
-                    projects.push((pid, row.get(2)?));
-                    projects.len() - 1
-                }
-            };
-            let n = sessions.len();
-            sessions.insert(row.get(0)?, (n, pi));
+            let id: String = row.get(0)?;
+            sessions.insert(id.clone(), titles.len());
+            titles.push((id, row.get(1)?));
         }
     }
 
     // One pass over the messages in range.
     let mut session_active = vec![false; sessions.len()];
-    let mut proj_messages = vec![0u32; projects.len()];
-    let mut proj_output = vec![0f64; projects.len()];
-    let mut proj_cost = vec![0f64; projects.len()];
+    let mut sess_messages = vec![0u32; sessions.len()];
+    let mut sess_output = vec![0f64; sessions.len()];
+    let mut sess_cost = vec![0f64; sessions.len()];
     let mut messages = 0u32;
     let mut output = 0f64;
     let mut cost = 0f64;
@@ -125,7 +98,7 @@ pub fn compute(conn: &Connection, r: &StatsRequest) -> CoreResult<Stats> {
         let mut st = conn.prepare(&sql)?;
         let mut rows = st.query(params_from_iter(bounds))?;
         while let Some(row) = rows.next()? {
-            let Some(&(si, pi)) = sessions.get(row.get_ref(0)?.as_str().unwrap_or_default()) else {
+            let Some(&si) = sessions.get(row.get_ref(0)?.as_str().unwrap_or_default()) else {
                 continue;
             };
             let Some(t) = local_time(row.get(2)?) else {
@@ -134,7 +107,7 @@ pub fn compute(conn: &Connection, r: &StatsRequest) -> CoreResult<Stats> {
             let day = t.date();
             if row.get::<_, bool>(1)? {
                 session_active[si] = true;
-                proj_messages[pi] += 1;
+                sess_messages[si] += 1;
                 messages += 1;
                 *heat_daily.entry(day).or_default() += 1;
                 week_hour[t.weekday().num_days_from_monday() as usize][t.hour() as usize] += 1;
@@ -152,11 +125,11 @@ pub fn compute(conn: &Connection, r: &StatsRequest) -> CoreResult<Stats> {
                 continue;
             }
             output += tok[1];
-            proj_output[pi] += tok[1];
+            sess_output[si] += tok[1];
             match row.get::<_, Option<f64>>(9)? {
                 Some(c) => {
                     cost += c;
-                    proj_cost[pi] += c;
+                    sess_cost[si] += c;
                 }
                 None => unpriced += 1,
             }
@@ -170,30 +143,25 @@ pub fn compute(conn: &Connection, r: &StatsRequest) -> CoreResult<Stats> {
         }
     }
 
-    let mut proj_sessions = vec![0u32; projects.len()];
-    for &(si, pi) in sessions.values() {
-        proj_sessions[pi] += u32::from(session_active[si]);
-    }
-    let mut project_stats: Vec<ProjectStat> = projects
+    let mut top: Vec<SessionStat> = titles
         .into_iter()
         .enumerate()
-        .filter(|&(i, _)| proj_sessions[i] > 0 || proj_output[i] > 0.0)
-        .map(|(i, (project_id, display_name))| ProjectStat {
-            project_id,
-            display_name,
-            sessions: proj_sessions[i],
-            messages: proj_messages[i],
-            output_tokens: proj_output[i],
-            cost: proj_cost[i],
+        .filter(|&(i, _)| sess_messages[i] > 0 || sess_output[i] > 0.0)
+        .map(|(i, (session_id, title))| SessionStat {
+            session_id,
+            title,
+            messages: sess_messages[i],
+            output_tokens: sess_output[i],
+            cost: sess_cost[i],
         })
         .collect();
-    project_stats.sort_by(|a, b| {
+    top.sort_by(|a, b| {
         b.cost
             .total_cmp(&a.cost)
             .then(b.output_tokens.total_cmp(&a.output_tokens))
-            .then(b.sessions.cmp(&a.sessions))
-            .then(a.project_id.cmp(&b.project_id))
+            .then(a.session_id.cmp(&b.session_id))
     });
+    top.truncate(TOP_SESSIONS);
 
     Ok(Stats {
         overview: StatsOverview {
@@ -233,23 +201,16 @@ pub fn compute(conn: &Connection, r: &StatsRequest) -> CoreResult<Stats> {
                 })
             })
             .collect(),
-        projects: project_stats,
-        tools: tool_stats(conn, r, ranged, from, to)?,
-        subagents: agent_type_stats(conn, r, ranged, from, to)?,
+        sessions: top,
+        tools: tool_stats(conn, ranged, from, to)?,
+        subagents: agent_type_stats(conn, ranged, from, to)?,
     })
 }
 
-fn tool_stats(
-    conn: &Connection,
-    r: &StatsRequest,
-    ranged: bool,
-    from: i64,
-    to: i64,
-) -> CoreResult<Vec<ToolStat>> {
+fn tool_stats(conn: &Connection, ranged: bool, from: i64, to: i64) -> CoreResult<Vec<ToolStat>> {
     let mut args = Vec::new();
     let mut sql = format!(
-        "SELECT t.name, count(*), sum(t.is_error) FROM tool_calls t WHERE t.session_id IN {}",
-        scope_subquery(&r.project_ids, &mut args)
+        "SELECT t.name, count(*), sum(t.is_error) FROM tool_calls t WHERE t.session_id IN {SCOPE}"
     );
     if ranged {
         sql.push_str(" AND t.ts_ms >= ? AND t.ts_ms <= ?");
@@ -269,7 +230,6 @@ fn tool_stats(
 
 fn agent_type_stats(
     conn: &Connection,
-    r: &StatsRequest,
     ranged: bool,
     from: i64,
     to: i64,
@@ -278,8 +238,7 @@ fn agent_type_stats(
     let mut sql = format!(
         "SELECT coalesce(a.agent_type, ?), count(*), coalesce(sum(a.out_tok), 0),
             coalesce(avg(a.ended_ms - a.started_ms), 0)
-         FROM subagents a WHERE a.session_id IN {}",
-        scope_subquery(&r.project_ids, &mut args)
+         FROM subagents a WHERE a.session_id IN {SCOPE}"
     );
     if ranged {
         sql.push_str(" AND a.started_ms >= ? AND a.started_ms <= ?");

@@ -12,7 +12,7 @@ async function openRich(page: Page) {
 
 /** Filters the session list by a Project picked in the search dialog. */
 async function filterProject(page: Page, name: string) {
-  await page.keyboard.press("Meta+P");
+  await page.keyboard.press("Meta+K");
   await page.getByTestId("search").getByRole("combobox").fill(name);
   await page.getByTestId("search-project").filter({ hasText: name }).click();
   await expect(page.getByTestId("search")).toBeHidden();
@@ -31,14 +31,14 @@ test("在搜索里选择 Project 后会话列表被过滤，清除筛选恢复�
   await expect(page.getByTestId("session-row").filter({ hasText: RICH_TITLE })).toBeVisible();
 });
 
-test("改动过其他 Project 的 Session 也出现在那个 Project 下，并标出其他 Project", async ({ page }) => {
+test("改动过其他 Project 的 Session 也出现在那个 Project 下；行上不显示 Project", async ({ page }) => {
   await page.goto("/");
   // Started in orbit-web, also edited lumen-api.
   const zod = page.getByTestId("session-row").filter({ hasText: "迁移表单校验到 zod" });
-  await expect(zod.getByTestId("row-projects")).toHaveText("orbit-web · lumen-api");
+  await expect(zod).not.toContainText("orbit-web");
   await filterProject(page, "lumen-api");
   await expect(page.getByTestId("session-row").filter({ hasText: RICH_TITLE })).toBeVisible();
-  await expect(zod.getByTestId("row-projects")).toHaveText("orbit-web");
+  await expect(zod).toBeVisible();
 });
 
 test("打开会话后渲染标题栏与消息", async ({ page }) => {
@@ -148,8 +148,8 @@ test("Session 列表可收起，刷新后仍保持", async ({ page }) => {
   await openRich(page);
   const header = page.getByTestId("header");
   const toolbar = (await page.getByTestId("toolbar").boundingBox())!;
-  // The list header sits under the toolbar, so its title starts past it.
-  expect((await page.getByTestId("list-title").boundingBox())!.x).toBeGreaterThan(toolbar.x + toolbar.width);
+  // The toolbar has its own strip above the list header; the title sits below it.
+  expect((await page.getByTestId("list-title").boundingBox())!.y).toBeGreaterThanOrEqual(toolbar.y + toolbar.height);
   const before = (await header.boundingBox())!;
 
   await page.keyboard.press("Control+Meta+L");

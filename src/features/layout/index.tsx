@@ -1,4 +1,4 @@
-import { ChartColumn, List } from "lucide-react";
+import { ChartColumn, List, Search } from "lucide-react";
 import { useSyncExternalStore } from "react";
 import { useHotkey } from "@/lib/hotkeys";
 import { cn } from "@/lib/cn";
@@ -22,13 +22,13 @@ export function useSessionsHidden(): { hidden: boolean; forced: boolean } {
 }
 
 /**
- * Left padding for `pane` when it is the leftmost visible column, so its header clears the traffic lights
- * and the toolbar; `undefined` otherwise.
+ * Left padding for the main pane's header when the Session list is hidden, so it clears the traffic
+ * lights and the toolbar; `undefined` otherwise. (The list has its own strip for them.)
  */
-export function useLeadingInset(pane: "sessions" | "main"): string | undefined {
+export function useLeadingInset(): string | undefined {
   const { hidden } = useSessionsHidden();
   const fullScreen = useFullScreen();
-  if (pane === "sessions" ? hidden : !hidden) return undefined;
+  if (!hidden) return undefined;
   return fullScreen ? "pl-[84px]" : "pl-[140px]";
 }
 
@@ -46,8 +46,8 @@ function Toggle({ pane, label, keys, icon, disabled }: { pane: CollapsiblePane; 
   );
 }
 
-/** Stats replaces the conversation; pressing it again goes back. */
-function StatsToggle() {
+/** Stats replaces the conversation; pressing it again goes back. Lives in the status bar. */
+export function StatsToggle({ className }: { className?: string }) {
   const active = useUi((s) => s.view === "stats");
   const setView = useUi((s) => s.setView);
   return (
@@ -58,14 +58,14 @@ function StatsToggle() {
       title="统计"
       aria-pressed={active}
       onClick={() => setView(active ? "sessions" : "stats")}
-      className={TOOL_CLASS}
+      className={cn(TOOL_CLASS, className)}
     >
-      <ChartColumn size={16} strokeWidth={1.6} aria-hidden />
+      <ChartColumn size={15} strokeWidth={1.6} aria-hidden />
     </button>
   );
 }
 
-/** Session list toggle and stats, pinned right after the traffic lights like a native toolbar. */
+/** Session list toggle and search, pinned right after the traffic lights like a native toolbar. */
 export function Toolbar() {
   const toggle = useUi((s) => s.toggleCollapsed);
   const { forced } = useSessionsHidden();
@@ -75,7 +75,16 @@ export function Toolbar() {
   return (
     <div data-testid="toolbar" className={cn("fixed top-[4px] z-10 flex gap-0.5", fullScreen ? "left-3" : "left-[78px]")}>
       <Toggle pane="sessions" label="Session 列表" keys="⌃⌘L" icon={<List size={16} strokeWidth={1.6} aria-hidden />} disabled={forced} />
-      <StatsToggle />
+      <button
+        type="button"
+        data-testid="search-button"
+        aria-label="搜索"
+        title="搜索（⌘K）"
+        onClick={() => useUi.getState().setSearchOpen(true)}
+        className={TOOL_CLASS}
+      >
+        <Search size={16} strokeWidth={1.6} aria-hidden />
+      </button>
     </div>
   );
 }

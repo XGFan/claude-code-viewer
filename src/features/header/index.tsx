@@ -21,7 +21,7 @@ export function SessionHeader() {
   const showHidden = useUi((s) => s.showHidden);
   const setShowHidden = useUi((s) => s.setShowHidden);
   const setSearchOpen = useUi((s) => s.setSearchOpen);
-  const inset = useLeadingInset("main");
+  const inset = useLeadingInset();
   const { data: d } = useSession(sessionId);
   if (!sessionId || !d) return null;
 

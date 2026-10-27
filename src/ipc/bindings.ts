@@ -305,15 +305,6 @@ export type PersistedRef = {
 /**  A newly fetched price list changed the API cost of indexed messages. */
 export type PricesChangedEvent = null;
 
-export type ProjectStat = {
-	projectId: string,
-	displayName: string,
-	sessions: number,
-	messages: number,
-	outputTokens: number,
-	cost: number,
-};
-
 export type ProjectSummary = {
 	id: string,
 	path: string,
@@ -421,6 +412,15 @@ export type SessionSort = "lastActive" | "created" | "messages" |
 /**  Sorts by API cost (main + subagents). */
 "cost";
 
+export type SessionStat = {
+	sessionId: string,
+	title: string,
+	/**  Main-file messages in range. */
+	messages: number,
+	outputTokens: number,
+	cost: number,
+};
+
 export type SessionSummary = {
 	id: string,
 	projectId: string,
@@ -471,7 +471,8 @@ export type Stats = {
 	daily: DailyModelTokens[],
 	heatDaily: DayCount[],
 	heatWeekHour: WeekHourCount[],
-	projects: ProjectStat[],
+	/**  The most expensive sessions in range (at most [`crate::stats::TOP_SESSIONS`]). */
+	sessions: SessionStat[],
 	tools: ToolStat[],
 	subagents: AgentTypeStat[],
 };
@@ -492,8 +493,6 @@ export type StatsOverview = {
 /**  Days and week-hours are bucketed in local time (`chrono::Local`, DST-correct). */
 export type StatsRequest = {
 	timeRange: TimeRange | null,
-	/**  Empty = all projects. */
-	projectIds: string[],
 };
 
 export type SubagentRun = {

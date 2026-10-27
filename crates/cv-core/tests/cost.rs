@@ -168,8 +168,12 @@ fn list_sorts_by_cost_and_stats_sum_it() {
     let stats = engine.stats(&StatsRequest::default()).unwrap();
     let total: f64 = list.iter().map(|s| s.cost).sum();
     assert!(close(stats.overview.cost, total));
-    let by_project: f64 = stats.projects.iter().map(|p| p.cost).sum();
-    assert!(close(by_project, total));
+    // The ranking's per-session cost is the session's own (all time, so the whole session).
+    assert!(stats.sessions.windows(2).all(|w| w[0].cost >= w[1].cost));
+    for r in &stats.sessions {
+        let s = list.iter().find(|s| s.id == r.session_id).unwrap();
+        assert!(close(r.cost, s.cost), "{}", r.session_id);
+    }
     assert!(d.summary.cost > 0.0);
 }
 

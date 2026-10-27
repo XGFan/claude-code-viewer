@@ -22,3 +22,8 @@
 - 用 Bash 做的修改（`sed -i`、代码生成等）不计入改动的 Project。
 - 按 Project 筛选时，列表、搜索、统计都包含改动过它的 Session；统计的 Project 排行仍按启动 Project 归属，每个 Session 只计一次，因此排行里的 Session 数可能少于按该 Project 筛选出的数量。
 - Project 身份变化需要重建索引（Schema 8）。
+
+## 后续调整
+
+- ⌘P 快速打开已并入 ⌘K 搜索，⌘P 不再使用。
+- 仓库归属对「这次做了什么」并不准确，Project 改为只在搜索里出现，作为找 Session 的辅助（按 Project 查找、限定范围、筛选 Session 列表）；统计页的 Project 过滤和排行（改为 Session 排行）、Session 列表行上的 Project 名都已去掉。后端的归属计算保留。

@@ -2,15 +2,13 @@ use serde::{Deserialize, Serialize};
 use specta::Type;
 use specta_typescript::Number;
 
-use super::common::{ProjectId, TimeRange};
+use super::common::{SessionId, TimeRange};
 
 /// Days and week-hours are bucketed in local time (`chrono::Local`, DST-correct).
 #[derive(Serialize, Deserialize, Type, Clone, Debug, Default, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct StatsRequest {
     pub time_range: Option<TimeRange>,
-    /// Empty = all projects.
-    pub project_ids: Vec<ProjectId>,
 }
 
 #[derive(Serialize, Deserialize, Type, Clone, Debug, Default, PartialEq)]
@@ -63,10 +61,10 @@ pub struct WeekHourCount {
 
 #[derive(Serialize, Deserialize, Type, Clone, Debug, PartialEq)]
 #[serde(rename_all = "camelCase")]
-pub struct ProjectStat {
-    pub project_id: ProjectId,
-    pub display_name: String,
-    pub sessions: u32,
+pub struct SessionStat {
+    pub session_id: SessionId,
+    pub title: String,
+    /// Main-file messages in range.
     pub messages: u32,
     #[specta(type = Number)]
     pub output_tokens: f64,
@@ -100,7 +98,8 @@ pub struct Stats {
     pub daily: Vec<DailyModelTokens>,
     pub heat_daily: Vec<DayCount>,
     pub heat_week_hour: Vec<WeekHourCount>,
-    pub projects: Vec<ProjectStat>,
+    /// The most expensive sessions in range (at most [`crate::stats::TOP_SESSIONS`]).
+    pub sessions: Vec<SessionStat>,
     pub tools: Vec<ToolStat>,
     pub subagents: Vec<AgentTypeStat>,
 }

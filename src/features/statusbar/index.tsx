@@ -1,3 +1,4 @@
+import { StatsToggle } from "@/features/layout";
 import { SettingsButton } from "@/features/settings";
 import { useIndexStatus } from "@/queries";
 
@@ -5,8 +6,13 @@ const nf = new Intl.NumberFormat("en-US");
 
 export function StatusBar() {
   const { data: s } = useIndexStatus();
-  const settings = <SettingsButton className="ml-auto size-6 text-secondary" />;
-  if (!s) return <div className="flex items-center border-t border-border bg-sidebar px-1.5">{settings}</div>;
+  const actions = (
+    <span className="ml-auto flex items-center gap-0.5">
+      <StatsToggle className="size-6" />
+      <SettingsButton className="size-6 text-secondary" />
+    </span>
+  );
+  if (!s) return <div className="flex items-center border-t border-border bg-sidebar px-1.5">{actions}</div>;
 
   const busy = s.phase === "scanning" || s.phase === "indexingText";
   const pct =
@@ -42,7 +48,7 @@ export function StatusBar() {
       ) : (
         <span>已索引 {nf.format(s.sessionsTotal)} 个 Session</span>
       )}
-      {settings}
+      {actions}
     </div>
   );
 }
