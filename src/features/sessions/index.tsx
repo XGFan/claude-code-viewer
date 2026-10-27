@@ -230,10 +230,6 @@ function drillLabel(d: Drill): string {
     }
     case "weekHour":
       return `${WEEKDAYS[d.weekday] ?? ""} ${d.hour} 时`;
-    case "tool":
-      return `工具 ${d.name}`;
-    case "agentType":
-      return `Subagent ${d.agentType}`;
     case "model":
       return `模型 ${d.model}`;
     case "span":

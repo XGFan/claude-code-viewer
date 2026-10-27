@@ -82,19 +82,4 @@ export const stats = {
   })),
   // Filled from the mock sessions by `getStats`.
   sessions: [],
-  tools: [
-    { name: "Bash", calls: 1240, failures: 118 },
-    { name: "Read", calls: 980, failures: 4 },
-    { name: "Edit", calls: 640, failures: 22 },
-    { name: "Grep", calls: 530, failures: 0 },
-    { name: "Write", calls: 210, failures: 3 },
-    { name: "TodoWrite", calls: 150, failures: 0 },
-    { name: "Agent", calls: 96, failures: 5 },
-    { name: "mcp__github__list_pull_requests", calls: 12, failures: 1 },
-  ],
-  subagents: [
-    { agentType: "Explore", runs: 58, outputTokens: 310_000, avgDurationMs: 42_000 },
-    { agentType: "general-purpose", runs: 31, outputTokens: 520_000, avgDurationMs: 188_000 },
-    { agentType: "test-engineer", runs: 12, outputTokens: 140_000, avgDurationMs: 236_000 },
-  ],
 } satisfies Stats;

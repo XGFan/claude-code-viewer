@@ -48,12 +48,6 @@ pub enum Drill {
         weekday: u32,
         hour: u32,
     },
-    Tool {
-        name: String,
-    },
-    AgentType {
-        agent_type: String,
-    },
     Model {
         model: String,
     },

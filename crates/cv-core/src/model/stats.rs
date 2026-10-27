@@ -106,25 +106,6 @@ pub struct SessionStat {
     pub cost: f64,
 }
 
-#[derive(Serialize, Deserialize, Type, Clone, Debug, PartialEq)]
-#[serde(rename_all = "camelCase")]
-pub struct ToolStat {
-    pub name: String,
-    pub calls: u32,
-    pub failures: u32,
-}
-
-#[derive(Serialize, Deserialize, Type, Clone, Debug, PartialEq)]
-#[serde(rename_all = "camelCase")]
-pub struct AgentTypeStat {
-    pub agent_type: String,
-    pub runs: u32,
-    #[specta(type = Number)]
-    pub output_tokens: f64,
-    #[specta(type = Number)]
-    pub avg_duration_ms: f64,
-}
-
 #[derive(Serialize, Deserialize, Type, Clone, Debug, Default, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct Stats {
@@ -135,6 +116,4 @@ pub struct Stats {
     pub activity: Activity,
     /// The most expensive sessions in range (at most [`crate::stats::TOP_SESSIONS`]).
     pub sessions: Vec<SessionStat>,
-    pub tools: Vec<ToolStat>,
-    pub subagents: Vec<AgentTypeStat>,
 }

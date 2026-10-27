@@ -378,46 +378,6 @@ fn totals_match_oracle() {
         .collect();
     assert_eq!(got, daily);
 
-    // Tools: main + subagent calls, failures from is_error results.
-    let mut tools: BTreeMap<String, (u32, u32)> = BTreeMap::new();
-    for s in o.sessions.values() {
-        for (id, (name, _)) in &s.tools {
-            let e = tools.entry(name.clone()).or_default();
-            e.0 += 1;
-            e.1 += u32::from(s.errors.contains(id));
-        }
-    }
-    let got: BTreeMap<String, (u32, u32)> = st
-        .tools
-        .iter()
-        .map(|t| (t.name.clone(), (t.calls, t.failures)))
-        .collect();
-    assert_eq!(got, tools);
-    assert_eq!(got["Bash"].1, 1, "the failed Bash call in basic");
-    assert!(got.keys().any(|n| n.starts_with("mcp__")));
-
-    // Subagents by agent type.
-    let mut types: BTreeMap<String, u32> = BTreeMap::new();
-    for s in o.sessions.values() {
-        for t in &s.agent_types {
-            *types.entry(t.clone()).or_default() += 1;
-        }
-    }
-    let got: BTreeMap<String, u32> = st
-        .subagents
-        .iter()
-        .map(|a| (a.agent_type.clone(), a.runs))
-        .collect();
-    assert_eq!(got, types);
-    assert_eq!(got["workflow-subagent"], 5);
-    let total_agent_out: f64 = st.subagents.iter().map(|a| a.output_tokens).sum();
-    assert_eq!(total_agent_out, (out - main_out) as f64);
-    assert!(st.subagents.iter().all(|a| a.avg_duration_ms >= 0.0));
-    assert!(
-        st.subagents.iter().any(|a| a.avg_duration_ms > 0.0),
-        "durations come from first/last message"
-    );
-
     // Session ranking: most expensive first, at most TOP_SESSIONS, each with its own numbers.
     assert!(st.sessions.len() <= cv_core::stats::TOP_SESSIONS);
     assert!(st.sessions.windows(2).all(|w| w[0].cost >= w[1].cost));
@@ -465,18 +425,6 @@ fn time_range_filter() {
     assert_eq!(st.overview.output_tokens, out as f64);
     assert_eq!(st.sessions.len(), 1);
     assert_eq!(st.sessions[0].session_id, ids::SUBAGENTS);
-    // Only the orphan run starts on that day.
-    assert_eq!(st.subagents.len(), 1);
-    assert_eq!(st.subagents[0].runs, 1);
-    let tools: usize = s
-        .tools
-        .values()
-        .filter(|(_, ts)| *ts >= from && *ts <= to)
-        .count();
-    assert_eq!(
-        st.tools.iter().map(|t| t.calls as usize).sum::<usize>(),
-        tools
-    );
 }
 
 /// Child half of `local_day_follows_tz`: prints the heat-map days under the inherited `TZ`.
@@ -591,25 +539,6 @@ fn drill_down_returns_exactly_the_contributing_sessions() {
         };
         assert_eq!(drill_ids(&env, drill, None), want, "model {model}");
     }
-    for t in &st.tools {
-        let want = set(&|s| s.tools.values().any(|(n, _)| *n == t.name));
-        let drill = Drill::Tool {
-            name: t.name.clone(),
-        };
-        assert_eq!(drill_ids(&env, drill, None), want, "tool {}", t.name);
-    }
-    for a in &st.subagents {
-        let want = set(&|s| s.agent_types.contains(&a.agent_type));
-        let drill = Drill::AgentType {
-            agent_type: a.agent_type.clone(),
-        };
-        assert_eq!(
-            drill_ids(&env, drill, None),
-            want,
-            "agent type {}",
-            a.agent_type
-        );
-    }
 }
 
 #[test]
@@ -637,27 +566,6 @@ fn drill_down_respects_the_time_range() {
             BTreeSet::from([ids::SUBAGENTS.to_owned()])
         );
     }
-    for t in &st.tools {
-        let drill = Drill::Tool {
-            name: t.name.clone(),
-        };
-        assert_eq!(
-            drill_ids(&env, drill, range.clone()),
-            BTreeSet::from([ids::SUBAGENTS.to_owned()])
-        );
-    }
-    // Bash is used in several sessions overall, but not by anyone else on that day.
-    assert!(
-        drill_ids(
-            &env,
-            Drill::Tool {
-                name: "Bash".into()
-            },
-            None
-        )
-        .len()
-            > 1
-    );
     // A day outside the range yields nothing.
     assert!(
         drill_ids(

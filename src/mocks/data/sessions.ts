@@ -43,8 +43,6 @@ interface Def {
   tokens: TokenTotals;
   subagentCount?: number;
   turns: Turn[];
-  tools: string[];
-  agentTypes: string[];
   forkOf?: { id: string; forkTurns: number };
 }
 
@@ -66,13 +64,12 @@ const defs: Def[] = [
   {
     id: IDS.rich, projectId: LUMEN, title: "为 /v1/chat 接口增加令牌桶限流中间件", titleSource: "ai", createdAgo: 3 * HOUR, lastActiveAgo: 2 * MIN,
     gitBranch: "feat/rate-limit", live: live("busy", 48211, "processFile"), model: "claude-sonnet-5-5",
-    tokens: tok(0, 0), turns: [], tools: ["Bash", "Read", "Edit", "Write", "AskUserQuestion", "TodoWrite", "TaskCreate", "TaskUpdate", "Agent", "Workflow", "mcp__github__list_pull_requests", "Grep"],
-    agentTypes: ["Explore", "general-purpose", "test-engineer", "code-reviewer", "security-reviewer"],
+    tokens: tok(0, 0), turns: [],
   },
   {
     id: IDS.forkOrigin, projectId: LUMEN, title: "重构认证模块：拆分 token 校验与会话存储", titleSource: "custom", createdAgo: 2 * DAY, lastActiveAgo: 2 * DAY - 40 * MIN,
     gitBranch: "refactor/auth", live: null, model: "claude-opus-4-7", tokens: tok(31_000, 24_800, 1_200_000, 64_000),
-    turns: authTurns, tools: ["Bash", "Read", "Edit"], agentTypes: [],
+    turns: authTurns,
   },
   {
     id: IDS.forkChild, projectId: LUMEN, title: "认证模块重构（改用 JWT 轮换）", titleSource: "ai", createdAgo: DAY + 3 * HOUR, lastActiveAgo: DAY,
@@ -81,7 +78,7 @@ const defs: Def[] = [
       { u: "改成 JWT 轮换：access 15 分钟，refresh 7 天。", a: "已在 `TokenVerifier` 中加入 `kid` 轮换，refresh token 存入 `SessionStore` 并做一次性使用。" },
       { u: "补一个轮换的单测。", a: "已新增 `rotation_rejects_reused_refresh_token`。", bash: { command: "cargo test rotation", out: "test result: ok. 3 passed; 0 failed" } },
     ],
-    tools: ["Bash", "Read", "Edit"], agentTypes: [], forkOf: { id: IDS.forkOrigin, forkTurns: 3 },
+    forkOf: { id: IDS.forkOrigin, forkTurns: 3 },
   },
   {
     id: IDS.redis, projectId: LUMEN, title: "排查 Redis 连接池泄漏", titleSource: "ai", createdAgo: 4 * DAY, lastActiveAgo: 4 * DAY - HOUR,
@@ -90,7 +87,6 @@ const defs: Def[] = [
       { u: "线上 Redis 连接数持续增长，帮我排查连接池泄漏。", a: "先确认是否有未归还的连接：检查 `deadpool` 的 `status()` 指标与 handler 中的 `?` 提前返回。", bash: { command: "rg -n \"pool.get\\(\\)\" src", out: "src/session.rs:44:    let mut conn = pool.get().await?;" } },
       { u: "session.rs 第 44 行看起来没问题？", a: "问题在 `spawn` 出去的任务持有 `conn` 跨越了 `.await` 且未设超时，超时任务被丢弃前连接不会归还。" },
     ],
-    tools: ["Bash", "Read", "Grep"], agentTypes: [],
   },
   {
     id: IDS.orbitLive, projectId: ORBIT, title: "优化首页首屏加载（LCP 3.2s → 1.8s）", titleSource: "ai", createdAgo: 5 * HOUR, lastActiveAgo: 8 * MIN,
@@ -99,7 +95,6 @@ const defs: Def[] = [
       { u: "首页 LCP 3.2s，帮我定位瓶颈并优化到 2s 以内。", a: "LCP 元素是首屏轮播图，未设置 `fetchpriority`，且被 3 个同步脚本阻塞。", bash: { command: "pnpm lighthouse --only-categories=performance", out: "LCP: 3.2 s\nTBT: 410 ms" } },
       { u: "先把轮播首图预加载，再把脚本改成 defer。", a: "已为首图添加 `<link rel=\"preload\" as=\"image\" fetchpriority=\"high\">`，三处脚本改为 `defer`。LCP 降至 1.8 s。", bash: { command: "pnpm lighthouse --only-categories=performance", out: "LCP: 1.8 s\nTBT: 120 ms" } },
     ],
-    tools: ["Bash", "Read", "Edit"], agentTypes: [],
   },
   {
     id: IDS.orbitZod, projectId: ORBIT, editedProjectIds: [ORBIT, LUMEN], title: "迁移表单校验到 zod", titleSource: "ai", createdAgo: 3 * DAY, lastActiveAgo: 3 * DAY - 2 * HOUR,
@@ -108,7 +103,6 @@ const defs: Def[] = [
       { u: "把注册表单的校验从 yup 迁移到 zod，并保持错误文案不变。", a: "已迁移 `signupSchema`，错误文案通过 `z.string().min(8, \"密码至少 8 位\")` 保持一致。" },
       { u: "把登录表单也迁了。", a: "登录表单已迁移，`yup` 依赖仅剩 2 处引用。" },
     ],
-    tools: ["Read", "Edit", "Bash"], agentTypes: [],
   },
   {
     id: IDS.orbitReview, projectId: ORBIT, title: "/review 订单列表页", titleSource: "firstPrompt", createdAgo: 8 * DAY, lastActiveAgo: 8 * DAY - 30 * MIN,
@@ -117,7 +111,7 @@ const defs: Def[] = [
       { u: "/review 订单列表页", a: "发现 2 个问题：分页参数未做上限校验；列表在筛选变化时未取消上一个请求。" },
       { u: "/rename 订单列表页审查", out: "<local-command-stdout>Session renamed to: \u001b[1m订单列表页审查\u001b[22m</local-command-stdout>" },
     ],
-    tools: ["Read", "Grep"], agentTypes: ["code-reviewer"], subagentCount: 1,
+    subagentCount: 1,
   },
   {
     id: IDS.homelabFlux, projectId: HOMELAB, title: "为 Flux 增加 kestrel-cli 镜像自动更新", titleSource: "ai", createdAgo: 6 * DAY, lastActiveAgo: 6 * DAY - 3 * HOUR,
@@ -125,7 +119,6 @@ const defs: Def[] = [
     turns: [
       { u: "给 kestrel-cli 的镜像加上 Flux ImageUpdateAutomation，只跟踪 semver 1.x。", a: "已添加 `ImageRepository`、`ImagePolicy`（semver `1.x`）与 `ImageUpdateAutomation`。" },
     ],
-    tools: ["Read", "Write", "Bash"], agentTypes: [],
   },
   {
     id: IDS.homelabLonghorn, projectId: HOMELAB, title: "Longhorn 卷扩容与备份策略", titleSource: "custom", createdAgo: 12 * DAY, lastActiveAgo: 12 * DAY - 2 * HOUR,
@@ -133,11 +126,10 @@ const defs: Def[] = [
     turns: [
       { u: "把 postgres 的 PVC 从 20Gi 扩到 50Gi，并设置每日备份保留 7 份。", a: "已修改 PVC 请求为 50Gi，并新增 `RecurringJob`（每日 03:00，retain=7）。" },
     ],
-    tools: ["Read", "Edit"], agentTypes: [],
   },
   {
     id: IDS.untitled, projectId: ORBIT, title: "（无标题）", titleSource: "untitled", createdAgo: 20 * DAY, lastActiveAgo: 20 * DAY - 10 * MIN,
-    gitBranch: null, live: null, model: null, tokens: tok(300, 120, 0, 0), turns: [], tools: [], agentTypes: [],
+    gitBranch: null, live: null, model: null, tokens: tok(300, 120, 0, 0), turns: [],
   },
 ];
 
@@ -173,8 +165,6 @@ function turnNodes(prefix: string, startMs: number, turns: Turn[], inheritedCoun
 
 export interface MockSessionData {
   summary: SessionSummary;
-  tools: string[];
-  agentTypes: string[];
   /** Main path nodes; Rich session overrides this with `richMain`. */
   nodes: Node[];
   forkOf?: { id: string; count: number; lastInheritedId: string };
@@ -217,5 +207,5 @@ export const sessionData: MockSessionData[] = defs.map((d) => {
     primaryModel: d.model,
     editedProjectIds: d.editedProjectIds ?? [],
   };
-  return { summary, tools: d.tools, agentTypes: d.agentTypes, nodes, forkOf };
+  return { summary, nodes, forkOf };
 });

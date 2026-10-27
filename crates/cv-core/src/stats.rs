@@ -2,9 +2,8 @@
 //!
 //! Semantics (each chart dimension has a [`Drill`](crate::model::Drill) in `index::reader` that
 //! returns exactly the contributing sessions):
-//! - Scope: non-empty sessions; the time range applies
-//!   to each row's own timestamp (`messages.ts_ms`, `tool_calls.ts_ms`, `subagents.started_ms`),
-//!   both bounds inclusive.
+//! - Scope: non-empty sessions; the time range applies to each message's own timestamp
+//!   (`messages.ts_ms`), both bounds inclusive.
 //! - `overview.messages`, `heat_daily`, `heat_week_hour`, `overview.sessions`,
 //!   `overview.active_days` and the ranked sessions' `messages`: main-file messages only
 //!   (human/command prompts + assistant messages by `message.id`, as `message_count`).
@@ -12,9 +11,6 @@
 //!   (`overview.cost`, session `cost`, see `pricing`): main + subagent messages, each billed
 //!   once (`messages.billed`, see `writer::rebill`); `daily` skips messages without tokens
 //!   (prompts, `<synthetic>` errors).
-//! - `tools`: main + subagent tool calls (a Subagent's tool use is still the user's tool use);
-//!   failures are tool results with `is_error: true`.
-//! - `subagents`: one run per `subagents` row, grouped by `agent_type`.
 //! - `activity`: main-file messages per bar over the range (from the earliest message when it has no
 //!   lower bound, to now when it has no upper bound); see [`choose_bucket`].
 //!
@@ -23,14 +19,13 @@
 use std::collections::{BTreeMap, HashMap};
 
 use chrono::{Datelike, Duration, Local, NaiveDate, NaiveDateTime, TimeZone, Timelike};
-use rusqlite::types::Value;
 use rusqlite::{Connection, params_from_iter};
 
 use crate::error::CoreResult;
 use crate::index::schema::MSG_ASSISTANT;
 use crate::model::{
-    Activity, ActivityBar, ActivityBucket, AgentTypeStat, DailyModelTokens, DayCount, SessionStat,
-    Stats, StatsOverview, StatsRequest, TimeRange, ToolStat, WeekHourCount,
+    Activity, ActivityBar, ActivityBucket, DailyModelTokens, DayCount, SessionStat, Stats,
+    StatsOverview, StatsRequest, TimeRange, WeekHourCount,
 };
 
 /// Label of messages without a model and Subagent Runs without an `agentType`
@@ -51,10 +46,6 @@ pub(crate) fn range_bounds(r: Option<&TimeRange>) -> (i64, i64) {
     let to = r.and_then(|r| r.to_ms).map_or(i64::MAX, |v| v as i64);
     (from, to)
 }
-
-/// Ids of the sessions in scope, as a subquery (a hashed `IN` list is much cheaper than a
-/// per-row join on 100k+ tool calls).
-const SCOPE: &str = "(SELECT s.id FROM sessions s WHERE s.is_empty = 0)";
 
 /// Length of the session ranking.
 pub const TOP_SESSIONS: usize = 10;
@@ -208,8 +199,6 @@ pub fn compute(conn: &Connection, r: &StatsRequest) -> CoreResult<Stats> {
             })
             .collect(),
         sessions: top,
-        tools: tool_stats(conn, ranged, from, to)?,
-        subagents: agent_type_stats(conn, ranged, from, to)?,
     })
 }
 
@@ -336,54 +325,4 @@ fn activity(hourly: &BTreeMap<NaiveDateTime, u32>, range: Option<&TimeRange>) ->
         t = end;
     }
     Activity { bucket, bars }
-}
-
-fn tool_stats(conn: &Connection, ranged: bool, from: i64, to: i64) -> CoreResult<Vec<ToolStat>> {
-    let mut args = Vec::new();
-    let mut sql = format!(
-        "SELECT t.name, count(*), sum(t.is_error) FROM tool_calls t WHERE t.session_id IN {SCOPE}"
-    );
-    if ranged {
-        sql.push_str(" AND t.ts_ms >= ? AND t.ts_ms <= ?");
-        args.extend([Value::Integer(from), Value::Integer(to)]);
-    }
-    sql.push_str(" GROUP BY t.name ORDER BY count(*) DESC, t.name");
-    let mut st = conn.prepare(&sql)?;
-    let rows = st.query_map(params_from_iter(args), |row| {
-        Ok(ToolStat {
-            name: row.get(0)?,
-            calls: row.get(1)?,
-            failures: row.get(2)?,
-        })
-    })?;
-    Ok(rows.collect::<Result<_, _>>()?)
-}
-
-fn agent_type_stats(
-    conn: &Connection,
-    ranged: bool,
-    from: i64,
-    to: i64,
-) -> CoreResult<Vec<AgentTypeStat>> {
-    let mut args = vec![Value::Text(UNKNOWN.to_owned())];
-    let mut sql = format!(
-        "SELECT coalesce(a.agent_type, ?), count(*), coalesce(sum(a.out_tok), 0),
-            coalesce(avg(a.ended_ms - a.started_ms), 0)
-         FROM subagents a WHERE a.session_id IN {SCOPE}"
-    );
-    if ranged {
-        sql.push_str(" AND a.started_ms >= ? AND a.started_ms <= ?");
-        args.extend([Value::Integer(from), Value::Integer(to)]);
-    }
-    sql.push_str(" GROUP BY 1 ORDER BY count(*) DESC, 1");
-    let mut st = conn.prepare(&sql)?;
-    let rows = st.query_map(params_from_iter(args), |row| {
-        Ok(AgentTypeStat {
-            agent_type: row.get(0)?,
-            runs: row.get(1)?,
-            output_tokens: row.get::<_, i64>(2)? as f64,
-            avg_duration_ms: row.get::<_, f64>(3)?,
-        })
-    })?;
-    Ok(rows.collect::<Result<_, _>>()?)
 }

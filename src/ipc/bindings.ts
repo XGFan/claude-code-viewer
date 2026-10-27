@@ -59,13 +59,6 @@ export type ActivityBar = {
 /**  Width of one activity bar; aligned in local time (whole n hours, midnight, Monday, the 1st). */
 export type ActivityBucket = "hour1" | "hour3" | "hour6" | "hour12" | "day" | "week" | "month";
 
-export type AgentTypeStat = {
-	agentType: string,
-	runs: number,
-	outputTokens: number,
-	avgDurationMs: number,
-};
-
 /**  Error returned by every command. `message` is one Chinese sentence for display. */
 export type AppError = {
 	code: ErrorCode,
@@ -152,7 +145,7 @@ export type Drill =
 /**  `day` is `YYYY-MM-DD`. */
 { kind: "day"; day: string } | 
 /**  `weekday` 0 = Monday. */
-{ kind: "weekHour"; weekday: number; hour: number } | { kind: "tool"; name: string } | { kind: "agentType"; agentType: string } | { kind: "model"; model: string } | 
+{ kind: "weekHour"; weekday: number; hour: number } | { kind: "model"; model: string } | 
 /**  Main-file messages in `[from_ms, to_ms)` (an activity bar). */
 { kind: "span"; fromMs: number; toMs: number };
 
@@ -495,8 +488,6 @@ export type Stats = {
 	activity: Activity,
 	/**  The most expensive sessions in range (at most [`crate::stats::TOP_SESSIONS`]). */
 	sessions: SessionStat[],
-	tools: ToolStat[],
-	subagents: AgentTypeStat[],
 };
 
 export type StatsOverview = {
@@ -600,12 +591,6 @@ export type ToolResult = {
 	 *  AskUserQuestion {questions,answers,annotations}, Task* {task,statusChange}, Edit {structuredPatch?}.
 	 */
 	extraJson: string | null,
-};
-
-export type ToolStat = {
-	name: string,
-	calls: number,
-	failures: number,
 };
 
 /**  The whole selected path of a Session (or Subagent Run) with capped content. */

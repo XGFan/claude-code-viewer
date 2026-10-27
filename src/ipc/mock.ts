@@ -380,7 +380,7 @@ function listSessions(q: SessionQuery): SessionSummary[] {
   }
   const drill = q.drill;
   if (drill) {
-    rows = rows.filter(({ d, s }) => {
+    rows = rows.filter(({ s }) => {
       switch (drill.kind) {
         case "day":
           return localParts(s.lastActiveMs).day === drill.day;
@@ -388,10 +388,6 @@ function listSessions(q: SessionQuery): SessionSummary[] {
           const p = localParts(s.lastActiveMs);
           return p.weekday === drill.weekday && p.hour === drill.hour;
         }
-        case "tool":
-          return d.tools.includes(drill.name);
-        case "agentType":
-          return d.agentTypes.includes(drill.agentType);
         case "model":
           return s.primaryModel === drill.model;
         case "span":

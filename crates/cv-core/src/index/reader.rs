@@ -208,8 +208,6 @@ pub fn project_match(ids: &[String], args: &mut Vec<Value>) -> String {
 /// session must have a contributing row inside the range, mirroring `stats::compute` exactly:
 /// - `Day` / `WeekHour`: a main-file message at that local day / weekday×hour;
 /// - `Model`: a main or Subagent message of that model that carries tokens;
-/// - `Tool`: a main or Subagent tool call of that name;
-/// - `AgentType`: a Subagent Run of that type (range on its start time);
 /// - `Span`: a main-file message in `[from_ms, to_ms)` (an activity bar).
 pub fn list_sessions(conn: &Connection, q: &SessionQuery) -> CoreResult<Vec<SessionSummary>> {
     let mut conds = vec!["s.is_empty = 0".to_owned()];
@@ -272,22 +270,6 @@ pub fn list_sessions(conn: &Connection, q: &SessionQuery) -> CoreResult<Vec<Sess
                 "EXISTS (SELECT 1 FROM messages m WHERE m.session_id = s.id
                     AND coalesce(m.model, ?) = ? AND m.role = {MSG_ASSISTANT} AND m.billed = 1
                     AND (m.in_tok > 0 OR m.out_tok > 0 OR m.cr_tok > 0 OR m.cc_tok > 0){range})"
-            ));
-        }
-        Some(Drill::Tool { name }) => {
-            args.push(Value::Text(name.clone()));
-            let range = in_range("t.ts_ms", &mut args);
-            conds.push(format!(
-                "s.id IN (SELECT t.session_id FROM tool_calls t WHERE t.name = ?{range})"
-            ));
-        }
-        Some(Drill::AgentType { agent_type }) => {
-            args.push(Value::Text(stats::UNKNOWN.to_owned()));
-            args.push(Value::Text(agent_type.clone()));
-            let range = in_range("a.started_ms", &mut args);
-            conds.push(format!(
-                "EXISTS (SELECT 1 FROM subagents a WHERE a.session_id = s.id
-                    AND coalesce(a.agent_type, ?) = ?{range})"
             ));
         }
         Some(Drill::WeekHour { weekday, hour }) => week_hour = Some((*weekday, *hour)),
