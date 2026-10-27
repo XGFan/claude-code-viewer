@@ -1,6 +1,8 @@
 //! Format-compatibility diagnostics from `files`, `diag_counts` and version aggregation.
 //!
 //! - Unknown names come from `diag_counts` (`mcp__*` tools are a known class and never counted).
+//!   Names recorded before they were added to [`known`] are dropped on read, so the report is
+//!   current without a rebuild.
 //! - A corrupt line carries no version, so a file's failed lines are attributed to the newest
 //!   Claude Code version seen in its session.
 //! - `orphan_subagents`: non-workflow Subagent Runs whose `meta.toolUseId` matches no main-file
@@ -15,7 +17,18 @@ use rusqlite::Connection;
 
 use crate::error::CoreResult;
 use crate::index::schema::{DIAG_BLOCK, DIAG_ENTRY, DIAG_SYSTEM_SUBTYPE, DIAG_TOOL};
+use crate::known;
 use crate::model::{Diagnostics, FileFailure, NameCount, VersionStat};
+
+fn is_known(cat: i64, name: &str) -> bool {
+    match cat {
+        DIAG_ENTRY => known::is_known_entry_type(name),
+        DIAG_BLOCK => known::is_known_block_type(name),
+        DIAG_SYSTEM_SUBTYPE => known::is_known_system_subtype(name),
+        DIAG_TOOL => known::is_known_tool(name),
+        _ => false,
+    }
+}
 
 pub fn compute(conn: &Connection) -> CoreResult<Diagnostics> {
     let mut d = Diagnostics::default();
@@ -78,9 +91,13 @@ pub fn compute(conn: &Connection) -> CoreResult<Diagnostics> {
     )?;
     let mut rows = st.query([])?;
     while let Some(r) = rows.next()? {
+        let (cat, name): (i64, String) = (r.get(0)?, r.get(1)?);
+        if is_known(cat, &name) {
+            continue;
+        }
         let version: String = r.get(2)?;
         let count: u32 = r.get(3)?;
-        let e = names.entry((r.get(0)?, r.get(1)?)).or_default();
+        let e = names.entry((cat, name)).or_default();
         e.0 += count;
         if !version.is_empty() {
             versions

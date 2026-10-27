@@ -27,6 +27,11 @@ pub const ENTRY_TYPES: &[&str] = &[
     "relocated",
     "worktree-state",
     "fork-context-ref",
+    "continued-in",
+    "tools-used",
+    "api-request",
+    "api-request-blob",
+    "api-request-shape",
 ];
 
 /// Entry types matched by prefix (e.g. `artifact-autoreact-ledger`).
@@ -42,6 +47,7 @@ pub const BLOCK_TYPES: &[&str] = &[
     "image",
     "document",
     "fallback",
+    "tool_addition",
 ];
 
 /// `subtype` values of `system` entries.
@@ -58,6 +64,7 @@ pub const SYSTEM_SUBTYPES: &[&str] = &[
     "informational",
     "model_refusal_fallback",
     "model_consent_fallback",
+    "bridge_status",
 ];
 
 /// System subtypes hidden unless `include_hidden` (§3.4 step 6).
@@ -108,6 +115,9 @@ pub const TOOLS: &[&str] = &[
     "SlashCommand",
     "Artifact",
     "SendUserFile",
+    "DesignSync",
+    "ReportFindings",
+    "SendFeedback",
 ];
 
 /// Tools that spawn a Subagent Run.

@@ -8,13 +8,14 @@ use std::path::{Path, PathBuf};
 
 use common::{copy_dir_all, fixture_dir, ids};
 use cv_core::model::{DataRootSource, Diagnostics, NameCount, SessionQuery};
+use cv_core::paths::index_db_path;
 use cv_core::{Engine, EngineConfig};
 use serde_json::Value;
 use tempfile::TempDir;
 
 struct Env {
     root: TempDir,
-    _cache: TempDir,
+    cache: TempDir,
     engine: Engine,
 }
 
@@ -33,7 +34,7 @@ fn scanned(scenarios: &[&str]) -> Env {
     engine.scan_all(&|_| {}).unwrap();
     Env {
         root,
-        _cache: cache,
+        cache,
         engine,
     }
 }
@@ -167,6 +168,30 @@ fn version_table_and_orphans() {
     // subagents: `a0rphan…` points at a tool_use that exists nowhere; the nested run resolves via
     // its parent, the teammate has no toolUseId, workflow agents belong to their run.
     assert_eq!(d.orphan_subagents, 1);
+}
+
+#[test]
+fn names_known_since_indexing_are_dropped() {
+    let env = scanned(&["basic"]);
+    // An index built before these names were added to `known` still holds their counts.
+    let conn = rusqlite::Connection::open(index_db_path(env.cache.path())).unwrap();
+    conn.execute_batch(
+        "INSERT INTO diag_counts (file_id, category, name, version, count)
+         SELECT min(id), 0, 'api-request', '2.1.207', 5 FROM files;
+         INSERT INTO diag_counts (file_id, category, name, version, count)
+         SELECT min(id), 2, 'SendFeedback', '2.1.207', 1 FROM files;",
+    )
+    .unwrap();
+
+    let d = diagnostics(&env);
+    assert!(
+        d.unknown_entry_types
+            .iter()
+            .all(|n| n.name != "api-request")
+    );
+    assert!(d.unknown_tools.iter().all(|n| n.name != "SendFeedback"));
+    let shared = d.versions.iter().find(|v| v.version == "2.1.207").unwrap();
+    assert_eq!(shared.unknown_items, 2, "hologram_block + future_notice");
 }
 
 #[test]
