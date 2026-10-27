@@ -1,11 +1,20 @@
 import { differenceInCalendarDays, differenceInMinutes, format } from "date-fns";
 import { zhCN } from "date-fns/locale";
 
-/** 48300 -> "48.3K"，1210000 -> "1.21M"。 */
+const TOKEN_UNITS: [number, string, number][] = [
+  [1e3, "K", 1],
+  [1e6, "M", 2],
+  [1e9, "B", 2],
+];
+
+/** 48300 -> "48.3K"，1210000 -> "1.21M"，1543000000 -> "1.54B"；进位到 1000 时换下一个单位（999999 -> "1M"）。 */
 export function formatTokens(n: number): string {
   if (n < 1000) return String(n);
-  if (n < 1_000_000) return `${trim(n / 1000, 1)}K`;
-  return `${trim(n / 1_000_000, 2)}M`;
+  for (const [i, [size, unit, digits]] of TOKEN_UNITS.entries()) {
+    const v = Number((n / size).toFixed(digits));
+    if (v < 1000 || i === TOKEN_UNITS.length - 1) return `${trim(v, digits)}${unit}`;
+  }
+  return String(n);
 }
 
 /** 美元金额：0 -> "$0"，0.004 -> "<$0.01"，12.345 -> "$12.35"，1234.5 -> "$1,235"。 */

@@ -18,6 +18,12 @@ describe("formatTokens", () => {
     expect(formatTokens(48300)).toBe("48.3K");
     expect(formatTokens(1000)).toBe("1K");
     expect(formatTokens(1_210_000)).toBe("1.21M");
+    expect(formatTokens(1_543_000_000)).toBe("1.54B");
+    expect(formatTokens(2_400_000_000_000)).toBe("2400B");
+  });
+  it("进位到 1000 时换下一个单位", () => {
+    expect(formatTokens(999_999)).toBe("1M");
+    expect(formatTokens(999_996_000)).toBe("1B");
   });
 });
 
