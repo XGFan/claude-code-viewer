@@ -1,7 +1,7 @@
 //! DDL and schema version (plan §4).
 
 /// `PRAGMA user_version`; any mismatch deletes and recreates the index.
-pub const SCHEMA_VERSION: u32 = 7;
+pub const SCHEMA_VERSION: u32 = 8;
 
 /// `files.role`.
 pub const ROLE_MAIN: i64 = 0;
@@ -56,8 +56,12 @@ CREATE TABLE messages (
 CREATE INDEX messages_ts ON messages(ts_ms);
 CREATE INDEX messages_key ON messages(key);
 CREATE TABLE tool_calls (session_id TEXT NOT NULL, agent_id TEXT NOT NULL DEFAULT '', tool_use_id TEXT NOT NULL,
-  name TEXT NOT NULL, ts_ms INTEGER, is_error INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (session_id, tool_use_id)) WITHOUT ROWID;
+  name TEXT NOT NULL, ts_ms INTEGER, is_error INTEGER NOT NULL DEFAULT 0, file_path TEXT,
+  PRIMARY KEY (session_id, tool_use_id)) WITHOUT ROWID;
 CREATE INDEX tool_calls_name ON tool_calls(name);
+CREATE TABLE session_projects (session_id TEXT NOT NULL, project_id TEXT NOT NULL,
+  PRIMARY KEY (session_id, project_id)) WITHOUT ROWID;
+CREATE INDEX session_projects_project ON session_projects(project_id);
 CREATE TABLE subagents (session_id TEXT NOT NULL, agent_id TEXT NOT NULL, agent_type TEXT, parent_agent_id TEXT,
   tool_use_id TEXT, workflow_run_id TEXT, started_ms INTEGER, ended_ms INTEGER, out_tok INTEGER NOT NULL DEFAULT 0,
   PRIMARY KEY (session_id, agent_id)) WITHOUT ROWID;
@@ -86,6 +90,7 @@ DROP TABLE IF EXISTS msg_text;
 DROP TABLE IF EXISTS diag_counts;
 DROP TABLE IF EXISTS persisted_outputs;
 DROP TABLE IF EXISTS subagents;
+DROP TABLE IF EXISTS session_projects;
 DROP TABLE IF EXISTS tool_calls;
 DROP TABLE IF EXISTS messages;
 DROP TABLE IF EXISTS sessions;

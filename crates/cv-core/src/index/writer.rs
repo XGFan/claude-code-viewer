@@ -20,6 +20,7 @@ use crate::error::CoreResult;
 use crate::known;
 use crate::model::{FileRole, TitleSource, TokenTotals};
 use crate::parse::EntryRecord;
+use crate::project;
 use crate::raw::{RawEntry, decode_str, lenient};
 
 pub fn role_to_db(role: FileRole) -> i64 {
@@ -77,6 +78,8 @@ pub struct ToolCallRow {
     pub tool_use_id: String,
     pub name: String,
     pub ts_ms: Option<i64>,
+    /// File an edit tool ([`project::EDIT_TOOLS`]) wrote.
+    pub file_path: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -152,6 +155,7 @@ pub fn extract_rows<'a>(records: impl IntoIterator<Item = &'a EntryRecord>) -> F
                         tool_use_id: id.clone(),
                         name: name.clone(),
                         ts_ms: ts,
+                        file_path: edit_target(name, b.input.as_deref()),
                     });
                 }
                 let Some(ts) = ts else { continue };
@@ -386,6 +390,23 @@ fn persisted_path_from_content(raw: Option<&serde_json::value::RawValue>) -> Opt
     Some(rest.lines().next()?.trim().to_owned())
 }
 
+#[derive(Deserialize)]
+struct EditInput {
+    #[serde(default, deserialize_with = "lenient::string")]
+    file_path: Option<String>,
+    #[serde(default, deserialize_with = "lenient::string")]
+    notebook_path: Option<String>,
+}
+
+/// File written by an edit tool call; `None` for other tools.
+fn edit_target(name: &str, input: Option<&serde_json::value::RawValue>) -> Option<String> {
+    if !project::EDIT_TOOLS.contains(&name) {
+        return None;
+    }
+    let i: EditInput = serde_json::from_str(input?.get()).ok()?;
+    i.file_path.or(i.notebook_path).filter(|p| !p.is_empty())
+}
+
 /// Basename of an (absolute) persisted-output path; never opened as given (F8).
 fn basename(p: &str) -> Option<String> {
     let name = Path::new(p).file_name()?.to_str()?;
@@ -497,8 +518,8 @@ pub fn write_rows(
         }
     }
     let mut st = conn.prepare_cached(
-        "INSERT INTO tool_calls(session_id, agent_id, tool_use_id, name, ts_ms)
-         VALUES (?1, ?2, ?3, ?4, ?5) ON CONFLICT DO NOTHING",
+        "INSERT INTO tool_calls(session_id, agent_id, tool_use_id, name, ts_ms, file_path)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6) ON CONFLICT DO NOTHING",
     )?;
     for t in &rows.tool_calls {
         st.execute(params![
@@ -506,7 +527,8 @@ pub fn write_rows(
             agent_id,
             t.tool_use_id,
             t.name,
-            t.ts_ms
+            t.ts_ms,
+            t.file_path
         ])?;
     }
     let mut st = conn.prepare_cached(
@@ -543,6 +565,7 @@ pub fn delete_session(conn: &Connection, session_id: &str) -> CoreResult<()> {
         "msg_text",
         "messages",
         "tool_calls",
+        "session_projects",
         "subagents",
         "persisted_outputs",
         "files",
@@ -712,12 +735,50 @@ pub fn write_project(conn: &Connection, p: &ProjectRow) -> CoreResult<bool> {
     Ok(!existed)
 }
 
-/// Removes projects without sessions; returns the number removed.
+/// Removes projects no session started in or edited; returns the number removed.
 pub fn prune_projects(conn: &Connection) -> CoreResult<usize> {
     Ok(conn.execute(
-        "DELETE FROM projects WHERE id NOT IN (SELECT DISTINCT project_id FROM sessions)",
+        "DELETE FROM projects WHERE id NOT IN (SELECT project_id FROM sessions)
+            AND id NOT IN (SELECT project_id FROM session_projects)",
         [],
     )?)
+}
+
+/// Distinct files the edit tools of a session (main and subagents) wrote; rejected or failed calls
+/// wrote nothing.
+pub fn edited_paths(conn: &Connection, session_id: &str) -> CoreResult<Vec<String>> {
+    let mut st = conn.prepare_cached(
+        "SELECT DISTINCT file_path FROM tool_calls
+         WHERE session_id=?1 AND file_path IS NOT NULL AND is_error = 0",
+    )?;
+    let rows = st.query_map([session_id], |r| r.get(0))?;
+    Ok(rows.collect::<Result<_, _>>()?)
+}
+
+/// Replaces the Projects a session edited; returns true when the set changed.
+pub fn write_session_projects(
+    conn: &Connection,
+    session_id: &str,
+    ids: &[String],
+) -> CoreResult<bool> {
+    let mut st =
+        conn.prepare_cached("SELECT project_id FROM session_projects WHERE session_id=?1")?;
+    let before: HashSet<String> = st
+        .query_map([session_id], |r| r.get(0))?
+        .collect::<Result<_, _>>()?;
+    if before.len() == ids.len() && ids.iter().all(|id| before.contains(id)) {
+        return Ok(false);
+    }
+    conn.execute(
+        "DELETE FROM session_projects WHERE session_id=?1",
+        [session_id],
+    )?;
+    let mut st = conn
+        .prepare_cached("INSERT INTO session_projects(session_id, project_id) VALUES (?1, ?2)")?;
+    for id in ids {
+        st.execute(params![session_id, id])?;
+    }
+    Ok(true)
 }
 
 /// A2: recomputes `msg_text.on_main_line` for a session from its Main Line set. Subagent rows

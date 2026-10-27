@@ -35,8 +35,8 @@ export const useIndexStatus = () =>
 
 export const useProjects = () => useQuery({ queryKey: queryKeys.projects, queryFn: () => api.listProjects() });
 
-export const useSessions = (query: SessionQuery) =>
-  useQuery({ queryKey: queryKeys.sessions(query), queryFn: () => api.listSessions(query), placeholderData: keepPreviousData });
+export const useSessions = (query: SessionQuery, enabled = true) =>
+  useQuery({ queryKey: queryKeys.sessions(query), queryFn: () => api.listSessions(query), placeholderData: keepPreviousData, enabled });
 
 /** Session list for the current project / sort selection in the UI store. */
 export function useSessionList() {

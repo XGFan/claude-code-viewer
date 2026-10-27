@@ -62,7 +62,7 @@ pub enum Drill {
 #[derive(Serialize, Deserialize, Type, Clone, Debug, Default, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct SessionQuery {
-    /// Empty = all projects.
+    /// Sessions started in or editing any of these Projects; empty = all.
     pub project_ids: Vec<ProjectId>,
     pub sort: SessionSort,
     pub descending: bool,
@@ -113,6 +113,8 @@ pub struct SessionSummary {
     pub live: Option<LiveState>,
     pub fork_origin: Option<ForkOrigin>,
     pub primary_model: Option<String>,
+    /// Projects whose files an edit tool (main or Subagent) wrote, `project_id` included if edited.
+    pub edited_project_ids: Vec<ProjectId>,
 }
 
 #[derive(Serialize, Deserialize, Type, Clone, Copy, Debug, PartialEq, Eq)]

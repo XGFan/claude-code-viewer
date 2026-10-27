@@ -2,8 +2,8 @@
 
 只读的 macOS 桌面应用，用来搜索和阅读 Claude Code 留在本机 `~/.claude` 下的历史 Session。
 
-- **找得到**：⌘K 全局搜索（中英文子串匹配、`"短语"`、`-排除词`，可按 Project / 时间 / 角色 / 进行中过滤），可选扫描工具输出；命中直接跳到对应消息，包括 Subagent 内部和已回退的分支。
-- **读得舒服**：工具调用折叠成摘要，Bash 终端输出、Edit diff、代码高亮按需展开；Subagent 在右侧面板查看完整过程；Branch 切换、Fork 折叠、compact 分隔；⌘F 会话内查找、`j`/`k` 按轮次跳转、轮次大纲；Project 栏和 Session 列表可收起，竖屏也有宽敞的对话区。
+- **找得到**：⌘P 快速打开，按标题、Project、分支找 Session，或选一个 Project 筛选列表；在工作区根目录启动、改动横跨多个仓库的 Session 会出现在它改过的每个仓库下。⌘K 全局搜索（中英文子串匹配、`"短语"`、`-排除词`，可按 Project / 时间 / 角色 / 进行中过滤），可选扫描工具输出；命中直接跳到对应消息，包括 Subagent 内部和已回退的分支。
+- **读得舒服**：工具调用折叠成摘要，Bash 终端输出、Edit diff、代码高亮按需展开；Subagent 在右侧面板查看完整过程；Branch 切换、Fork 折叠、compact 分隔；⌘F 会话内查找、`j`/`k` 按轮次跳转、轮次大纲；Session 列表可收起，竖屏也有宽敞的对话区。
 - **实时**：监听文件变化，新 Session 自动出现；正在进行的 Session 实时追随。
 - **API 金额**：参照 ccusage 的算法按 API 价格估算每个 Session 的花费（含 Subagent，resume / Fork 复制的历史不重复计算），Session 列表可按金额排序，统计页汇总总额与 Project 排行。
 - **统计**：可按自定义每周重置时间统计本周期用量；按模型的每日 token、活跃热力图、Project 排行、工具调用与失败率、Subagent 使用，图表可下钻到 Session 列表。
@@ -12,14 +12,15 @@
 
 | 按键 | 作用 |
 |---|---|
+| ⌘P | 快速打开：查找 Session、按 Project 筛选 |
 | ⌘K | 全局搜索 |
 | ⌘F | 在当前 Session 内查找（Enter / ⇧Enter 上下跳转） |
 | `j` / `k` | 跳到下一个 / 上一个你的输入 |
 | ⌘↑ / ⌘↓ | 跳到对话顶部 / 底部 |
 | ↑ / ↓ | 在 Session 列表中切换（列表获得焦点时） |
-| ⌃⌘S / ⌃⌘L | 收起 / 展开 Project 栏、Session 列表 |
+| ⌃⌘L | 收起 / 展开 Session 列表 |
 | ⌘, | 设置（数据目录、格式兼容性诊断、重建索引） |
-| Esc | 关闭搜索、查找或 Subagent 面板 |
+| Esc | 关闭快速打开、搜索、查找或 Subagent 面板 |
 
 术语见 [CONTEXT.md](CONTEXT.md)，完整规格见 [docs/spec.md](docs/spec.md)，关键取舍见 [docs/adr/](docs/adr/)。
 

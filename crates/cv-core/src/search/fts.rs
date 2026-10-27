@@ -130,8 +130,7 @@ pub fn run(
         }
     }
     if let Some(p) = &r.project_id {
-        conds.push("s.project_id = ?".into());
-        args.push(Value::Text(p.clone()));
+        conds.push(reader::project_match(std::slice::from_ref(p), &mut args));
     }
     if r.live_only {
         conds.push(format!("t.session_id IN ({})", marks(live.len())));

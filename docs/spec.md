@@ -15,7 +15,11 @@
 ## 数据模型
 
 - **Session** 以 session ID 为身份。符号链接导致的重复文件在扫描时按 realpath/inode 去重；同一个 ID 的多份真实拷贝按消息 uuid 取并集合并。
-- **Project** 以 Session 启动时 cwd 的 realpath 为身份；Session 中途 cd 到别的目录不改变归属；目录已不存在时用原始路径，并标记"目录已不存在"。不支持手动合并 Project。
+- **Project** 是一个 git 仓库的根目录：从目录的 realpath 向上找最近的 `.git`（不越过、也不取用户主目录）；`.git` 是指向 `<主仓库>/.git/worktrees/<名字>` 的文件时（git worktree，含 `.claude/worktrees/`），归入主仓库；不在任何仓库里的目录就是它自己。不支持手动合并 Project。（ADR-0006）
+- **Session 与 Project 多对多**：
+  - **启动 Project**：启动时 cwd 所在的 Project，每个 Session 恰有一个；中途 cd 不改变它；目录已不存在时，归入仍存在的上级目录所在的仓库（如已删除的 worktree），没有仓库时用原始 cwd，并标记"目录已不存在"；条目里都没有 cwd 时用 `~/.claude/projects/` 下的编码目录。
+  - **改动的 Project**：Edit / Write / MultiEdit / NotebookEdit（主对话和 Subagent）写过的文件所在的 Project；被拒绝或失败的调用、数据目录（`~/.claude`）下的文件不算；不在任何仓库里、但位于启动 Project 下的文件算启动 Project，其他位置的文件不算；resume / Fork 复制进来的历史里的改动也算。按当前磁盘判断：仓库已删除的文件不再计入，用 Bash 做的修改（`sed -i`、生成代码等）不计入。
+  - Session 属于它的启动 Project 和所有改动的 Project；按 Project 筛选 Session 列表、搜索、统计时，两者都算。
 - **Subagent Run**：通过 `subagents/agent-<id>.meta.json` 里的 `toolUseId` 关联到主对话中的 Agent 调用，可以嵌套（`spawnDepth`）。
 - **Workflow Run**：来自 `workflows/` 和 `journal.jsonl`。
 - **Fork**：和其他 Session 共享消息 uuid 的 Session，独立显示，标注 Origin Session，继承来的历史默认折叠。
@@ -49,14 +53,15 @@
 
 ## 界面
 
-- 三栏布局：Project（"全部"默认选中，按最近活跃排序）| Session 列表 | 对话区；⌘K 打开全局搜索浮层；左栏底部是"统计"入口和设置按钮（⌘,）。
-- 侧栏的"全部 Session"和 PROJECTS 标题固定，只有 Project 列表滚动。
+- 两栏布局：Session 列表 | 对话区；红绿灯右侧是 Session 列表开关和统计按钮（再按一次回到 Session）；设置按钮（⌘,）在状态栏右端；⌘K 打开全局搜索浮层。
+- 快速打开（⌘P，或点 Session 列表标题）：按标题、Project 名、git 分支查找 Session，多个词须同时命中，命中 Project 名或分支的词越多越靠前，其余按最近活跃；空输入列出最近的 Session。按名称或路径匹配的 Project 列在上方，选中后用它筛选 Session 列表。不用双击 Shift，以免和输入法切换冲突。输入法组字期间不过滤。
+- Session 列表默认显示全部 Session；有 Project 筛选时标题显示 Project 名，筛选标签可清除。
 - 打开 Subagent 面板、统计页时，Session 列表栏让出宽度。
-- Project 栏和 Session 列表可各自收起（红绿灯右侧的两个按钮，⌃⌘S / ⌃⌘L），收起状态在重启后保留；Session 列表收起时点选 Project 或"全部 Session"会自动展开它；Session 列表被 Subagent 面板、统计页占用时其开关不可用。
+- Session 列表可收起（⌃⌘L），收起状态在重启后保留；Session 列表收起时在快速打开里选择 Project 会自动展开它；Session 列表被 Subagent 面板、统计页占用时其开关不可用。
 - 各栏头部、对话头部、统计页头部和底部状态栏可以按住拖动窗口（按钮、输入框除外）。
 - 窗口整体不随触摸板回弹，只有各栏内容区自身滚动。
 - 滚动条只在滚动时或指针停在滑块上时显示，不受系统"显示滚动条"设置影响。
-- Session 列表每行显示：标题、相对时间、消息数、token 数、API 金额（时间、消息数、token、金额都可以排序）、Live 标记、git 分支；从统计下钻时，列表顶部显示可清除的筛选标签。
+- Session 列表每行显示：标题、相对时间、消息数、token 数、API 金额（时间、消息数、token、金额都可以排序）、Live 标记、git 分支、所属 Project（启动 Project 在前，再列改动的其他 Project，不重复列出当前筛选的 Project）；从统计下钻时，列表顶部显示可清除的筛选标签。
 - Session 头部显示：模型、token（输入/输出/缓存）、API 金额（含 Subagent；悬停显示按模型的明细，有无价格的消息时金额后带"+"）、时长、消息数、工具调用次数、Subagent 数。
 - 对话渲染：
   - 每个工具调用折叠成一行摘要；连续的工具调用合并成一组；失败的调用和工具组同样默认折叠，组头显示失败数。
@@ -80,7 +85,8 @@
 
 - 时间范围：本周期 / 7 天 / 30 天 / 90 天 / 全部（默认 30 天）。"本周期"从最近一次每周重置算起到现在；重置时间（星期几 + 时刻，本机时区，默认周一 0:00）在选中本周期时显示的栏里设置，重启后保留；同一栏显示本周期的起止时间和剩余时间。
 - 口径：消息数和热力图只计主对话；token 和 API 金额（概览、每日、Project 排行）包含 Subagent，跨 Session 重复的消息只计一次；工具调用包含 Subagent 内的调用。日期按本机时区划分。
-- 下钻：点击柱子、热力图格子、工具、agentType、模型图例会筛选 Session 列表，并带上当前的时间范围；点击 Project 排行则切换到该 Project。
+- 下钻：点击柱子、热力图格子、工具、agentType、模型图例会筛选 Session 列表，并带上当前的时间范围；点击 Project 排行则按该 Project 筛选 Session 列表。
+- Project 过滤包含启动在该 Project 或改动过它的 Session；Project 排行按启动 Project 归属，每个 Session 只计一次。
 
 ## 诊断
 

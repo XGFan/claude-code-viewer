@@ -577,3 +577,155 @@ fn sidecar_changed_while_closed_is_picked_up() {
         .unwrap();
     assert_eq!(agent_type, "renamed");
 }
+
+/// One-line Session entry for `sid` in `cwd`; `content` is the message's JSON content.
+fn entry_line(ty: &str, uuid: &str, parent: &str, sid: &str, cwd: &Path, content: &str) -> String {
+    let parent = if parent.is_empty() {
+        "null".to_owned()
+    } else {
+        format!(r#""{parent}""#)
+    };
+    let msg = if ty == "user" {
+        format!(r#"{{"role":"user","content":{content}}}"#)
+    } else {
+        format!(
+            r#"{{"id":"m-{uuid}","role":"assistant","model":"claude-test","content":{content},"usage":{{"input_tokens":1,"output_tokens":1}}}}"#
+        )
+    };
+    format!(
+        r#"{{"type":"{ty}","uuid":"{uuid}","parentUuid":{parent},"timestamp":"2026-10-07T10:00:00.000Z","sessionId":"{sid}","cwd":"{cwd}","message":{msg}}}"#,
+        cwd = cwd.display()
+    ) + "\n"
+}
+
+fn edit_block(tool: &str, file: &Path) -> String {
+    format!(
+        r#"[{{"type":"tool_use","id":"tu-{tool}-{n}","name":"{tool}","input":{{"file_path":"{f}"}}}}]"#,
+        n = file.file_name().unwrap().to_string_lossy(),
+        f = file.display()
+    )
+}
+
+/// A Session started in a workspace (not a repository) belongs to it and to every repository its
+/// main file or Subagents edited; appended edits extend the set.
+#[test]
+fn session_belongs_to_its_start_project_and_the_projects_it_edited() {
+    use cv_core::model::SessionQuery;
+    let work = tempfile::tempdir().unwrap();
+    let ws = fs::canonicalize(work.path()).unwrap().join("ws");
+    for repo in ["api", "web", "lib"] {
+        fs::create_dir_all(ws.join(repo).join(".git")).unwrap();
+    }
+    let root = tempfile::tempdir().unwrap();
+    let sid = "11111111-2222-3333-4444-555555555555";
+    let dir = root.path().join("projects/-ws");
+    fs::create_dir_all(dir.join(sid).join("subagents")).unwrap();
+    let main = dir.join(format!("{sid}.jsonl"));
+    fs::write(
+        &main,
+        entry_line("user", "u1", "", sid, &ws, r#""fix it""#)
+            + &entry_line(
+                "assistant",
+                "a1",
+                "u1",
+                sid,
+                &ws,
+                &edit_block("Edit", &ws.join("api/src/a.rs")),
+            )
+            // A rejected write changes nothing.
+            + &entry_line(
+                "assistant",
+                "f1",
+                "a1",
+                sid,
+                &ws,
+                &edit_block("Write", &ws.join("lib/fail.rs")),
+            )
+            + &entry_line(
+                "user",
+                "f2",
+                "f1",
+                sid,
+                &ws,
+                r#"[{"type":"tool_result","tool_use_id":"tu-Write-fail.rs","is_error":true,"content":"denied"}]"#,
+            ),
+    )
+    .unwrap();
+    fs::write(
+        dir.join(sid).join("subagents/agent-x1.jsonl"),
+        entry_line(
+            "assistant",
+            "x1",
+            "",
+            sid,
+            &ws,
+            &edit_block("Write", &ws.join("web/index.ts")),
+        ),
+    )
+    .unwrap();
+    let cache = tempfile::tempdir().unwrap();
+    let engine = open(root.path(), cache.path());
+    engine.scan_all(&|_| {}).unwrap();
+
+    let id = |name: &str| ws.join(name).to_string_lossy().into_owned();
+    let in_project = |p: &str| {
+        let q = SessionQuery {
+            project_ids: vec![p.to_owned()],
+            ..SessionQuery::default()
+        };
+        engine
+            .list_sessions(&q)
+            .unwrap()
+            .iter()
+            .map(|s| s.id.clone())
+            .collect::<Vec<_>>()
+    };
+    let all = engine.list_sessions(&SessionQuery::default()).unwrap();
+    assert_eq!(all[0].project_id, ws.to_string_lossy());
+    let mut edited = all[0].edited_project_ids.clone();
+    edited.sort();
+    assert_eq!(edited, vec![id("api"), id("web")]);
+    for p in [ws.to_string_lossy().into_owned(), id("api"), id("web")] {
+        assert_eq!(in_project(&p), vec![sid.to_owned()], "{p}");
+    }
+    assert!(in_project(&id("lib")).is_empty());
+    let mut projects: Vec<(String, u32)> = engine
+        .list_projects()
+        .unwrap()
+        .into_iter()
+        .map(|p| (p.display_name, p.session_count))
+        .collect();
+    projects.sort();
+    assert_eq!(
+        projects,
+        vec![("api".into(), 1), ("web".into(), 1), ("ws".into(), 1)]
+    );
+
+    append(
+        &main,
+        &entry_line(
+            "assistant",
+            "a2",
+            "a1",
+            sid,
+            &ws,
+            &edit_block("MultiEdit", &ws.join("lib/x.rs")),
+        ),
+    );
+    engine.apply_changes(std::slice::from_ref(&main)).unwrap();
+    assert_eq!(in_project(&id("lib")), vec![sid.to_owned()]);
+
+    // Rewritten without the main-file edits: those Projects drop out and are pruned.
+    fs::write(&main, entry_line("user", "u1", "", sid, &ws, r#""fix it""#)).unwrap();
+    engine.apply_changes(std::slice::from_ref(&main)).unwrap();
+    assert!(in_project(&id("api")).is_empty());
+    assert!(in_project(&id("lib")).is_empty());
+    let mut names: Vec<String> = engine
+        .list_projects()
+        .unwrap()
+        .into_iter()
+        .map(|p| p.display_name)
+        .collect();
+    names.sort();
+    assert_eq!(names, vec!["web", "ws"]);
+}

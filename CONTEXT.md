@@ -9,7 +9,7 @@
 _Avoid_: 会话文件, conversation, chat, transcript（指整体时）
 
 **Project**:
-Session 所属的工作目录分组，以启动 Session 时的工作目录（解析符号链接后）为身份，而非 `~/.claude/projects/` 下的目录名。
+一个 git 仓库（worktree 归入主仓库），不在仓库里的目录则是该目录本身；以解析符号链接后的路径为身份，而非 `~/.claude/projects/` 下的目录名。一个 Session 属于它启动时所在的 Project，以及它改动过文件的每个 Project。
 _Avoid_: 项目目录, workspace, folder
 
 **Live Session**:

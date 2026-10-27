@@ -46,7 +46,7 @@ use crate::parse::{ParsedChunk, parse_bytes};
 use crate::paths::{index_db_path, prices_cache_path, sessions_dir};
 use crate::pricing::PriceTable;
 use crate::scan::{self, ScanResult, ScannedFile, SessionDirListing, SidecarFile, SidecarKind};
-use crate::{diag, search, stats};
+use crate::{diag, project, search, stats};
 
 /// Bytes parsed per write transaction during a sync.
 const BATCH_BYTES: u64 = 256 << 20;
@@ -285,7 +285,7 @@ impl Engine {
         self.index.read(|c| {
             let mut projects = reader::list_projects(c)?;
             let mut counts: HashMap<String, u32> = HashMap::new();
-            for p in reader::session_projects(c, &ids)?.into_values() {
+            for p in reader::session_projects(c, &ids)? {
                 *counts.entry(p).or_default() += 1;
             }
             for p in &mut projects {
@@ -531,6 +531,7 @@ impl Engine {
         let mut cs = ChangeSet::default();
         // Sessions sharing a message with a removed or rewritten one (billing may move to them).
         let mut neighbors: HashSet<String> = HashSet::new();
+        let mut resolver = project::Resolver::for_data_root(&self.cfg.data_root);
         let result = (|| -> CoreResult<()> {
             self.index.write(|conn| {
                 let tx = conn.transaction()?;
@@ -571,7 +572,7 @@ impl Engine {
                 self.index.write(|conn| {
                     let tx = conn.transaction()?;
                     for w in &works {
-                        write_work(&tx, w, &mut cs, &mut neighbors)?;
+                        write_work(&tx, w, &mut cs, &mut neighbors, &mut resolver)?;
                     }
                     tx.commit()?;
                     Ok(())
@@ -1495,7 +1496,7 @@ fn compute_session(
         });
         let mtime_ms = main.iter().map(|f| f.mtime_ns).max().unwrap_or(0) as f64 / 1e6;
         work.summary = Some(SessionSummaryOut {
-            project: project_for(cwd.as_deref(), &main[0].path),
+            project: project::Resolver::default().start_project(cwd.as_deref(), &main[0].path),
             agg: SessionAggregates { cwd, ..agg },
             mtime_ms,
         });
@@ -1507,35 +1508,6 @@ fn compute_session(
         });
     }
     work
-}
-
-/// Project of a session: the realpath of its start cwd; the raw cwd (flagged missing) when the
-/// directory no longer exists; the encoded project dir when no entry carries a cwd.
-fn project_for(cwd: Option<&str>, main_file: &Path) -> ProjectRow {
-    let (id, missing) = match cwd.filter(|c| !c.is_empty()) {
-        Some(c) => match std::fs::canonicalize(c) {
-            Ok(real) => (real.to_string_lossy().into_owned(), false),
-            Err(_) => (c.to_owned(), true),
-        },
-        None => (
-            main_file
-                .parent()
-                .unwrap_or(main_file)
-                .to_string_lossy()
-                .into_owned(),
-            false,
-        ),
-    };
-    let display_name = Path::new(&id)
-        .file_name()
-        .map(|n| n.to_string_lossy().into_owned())
-        .unwrap_or_else(|| id.clone());
-    ProjectRow {
-        path: id.clone(),
-        id,
-        display_name,
-        missing,
-    }
 }
 
 // -------------------------------------------------------------------- write
@@ -1584,6 +1556,7 @@ fn write_work(
     w: &SessionWork,
     cs: &mut ChangeSet,
     neighbors: &mut HashSet<String>,
+    resolver: &mut project::Resolver,
 ) -> CoreResult<()> {
     for (id, size, mtime) in &w.stat_only {
         writer::write_file_stat(conn, *id, *size, *mtime)?;
@@ -1629,6 +1602,7 @@ fn write_work(
     let Some(s) = &w.summary else {
         if before.is_some() {
             conn.execute("DELETE FROM sessions WHERE id=?1", [&w.sid])?;
+            writer::write_session_projects(conn, &w.sid, &[])?;
             cs.removed.push(w.sid.clone());
             cs.projects_changed = true;
         }
@@ -1672,6 +1646,9 @@ fn write_work(
     if writer::write_project(conn, &s.project)? || before != Some(a.is_empty) {
         cs.projects_changed = true;
     }
+    if write_edited_projects(conn, &w.sid, &s.project, resolver)? {
+        cs.projects_changed = true;
+    }
     if let Some(ms) = &w.main_set
         && writer::has_text_rows(conn, &w.sid)?
     {
@@ -1679,6 +1656,29 @@ fn write_work(
     }
     cs.changed.push(w.sid.clone());
     Ok(())
+}
+
+/// Re-derives the Projects a session edited from every edit path recorded for it (main file and
+/// subagents); returns true when the set or any Project row changed.
+fn write_edited_projects(
+    conn: &Connection,
+    sid: &str,
+    start: &ProjectRow,
+    resolver: &mut project::Resolver,
+) -> CoreResult<bool> {
+    let mut rows: BTreeMap<String, ProjectRow> = BTreeMap::new();
+    for path in writer::edited_paths(conn, sid)? {
+        if let Some(p) = resolver.edit_project(&path, start) {
+            rows.entry(p.id.clone()).or_insert(p);
+        }
+    }
+    let mut changed = false;
+    for p in rows.values() {
+        changed |= writer::write_project(conn, p)?;
+    }
+    let ids: Vec<String> = rows.into_keys().collect();
+    changed |= writer::write_session_projects(conn, sid, &ids)?;
+    Ok(changed)
 }
 
 /// Quotes a session id for pasting into a shell; ids come from file names, so anything beyond

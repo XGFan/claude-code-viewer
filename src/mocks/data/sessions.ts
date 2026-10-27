@@ -31,6 +31,8 @@ interface Turn {
 interface Def {
   id: string;
   projectId: string;
+  /** Projects an edit tool wrote to (`projectId` included if edited). */
+  editedProjectIds?: string[];
   title: string;
   titleSource: TitleSource;
   createdAgo: number;
@@ -100,7 +102,7 @@ const defs: Def[] = [
     tools: ["Bash", "Read", "Edit"], agentTypes: [],
   },
   {
-    id: IDS.orbitZod, projectId: ORBIT, title: "迁移表单校验到 zod", titleSource: "ai", createdAgo: 3 * DAY, lastActiveAgo: 3 * DAY - 2 * HOUR,
+    id: IDS.orbitZod, projectId: ORBIT, editedProjectIds: [ORBIT, LUMEN], title: "迁移表单校验到 zod", titleSource: "ai", createdAgo: 3 * DAY, lastActiveAgo: 3 * DAY - 2 * HOUR,
     gitBranch: "chore/zod", live: null, model: "claude-sonnet-5-5", tokens: tok(15_800, 13_100, 1_100_000, 38_000),
     turns: [
       { u: "把注册表单的校验从 yup 迁移到 zod，并保持错误文案不变。", a: "已迁移 `signupSchema`，错误文案通过 `z.string().min(8, \"密码至少 8 位\")` 保持一致。" },
@@ -213,6 +215,7 @@ export const sessionData: MockSessionData[] = defs.map((d) => {
     live: d.live,
     forkOrigin: d.forkOf ? { sessionId: d.forkOf.id, title: originDef.title, forkPointId: forkOf!.lastInheritedId } : null,
     primaryModel: d.model,
+    editedProjectIds: d.editedProjectIds ?? [],
   };
   return { summary, tools: d.tools, agentTypes: d.agentTypes, nodes, forkOf };
 });

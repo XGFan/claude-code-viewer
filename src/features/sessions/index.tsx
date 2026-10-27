@@ -1,9 +1,10 @@
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { ChevronDown, GitBranch, X } from "lucide-react";
+import { ChevronDown, Folder, GitBranch, X } from "lucide-react";
 import { useMemo, useRef, type KeyboardEvent } from "react";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import type { Drill, ProjectSummary, SessionSort, SessionSummary } from "@/ipc/bindings";
 import { useLeadingInset } from "@/features/layout";
+import { sessionProjectIds } from "@/features/quick-open/match";
 import { cn } from "@/lib/cn";
 import { formatCost, formatRelative, formatTokens } from "@/lib/format";
 import { useProjects, useSessionList } from "@/queries";
@@ -32,6 +33,8 @@ export function SessionList() {
   const inset = useLeadingInset("sessions");
   const drill = useUi((s) => s.statsDrill);
   const setDrill = useUi((s) => s.setStatsDrill);
+  const setProjectIds = useUi((s) => s.setProjectIds);
+  const setQuickOpen = useUi((s) => s.setQuickOpenOpen);
 
   const list = data ?? [];
   const names = useMemo(() => new Map((projects ?? []).map((p: ProjectSummary) => [p.id, p.displayName])), [projects]);
@@ -66,7 +69,16 @@ export function SessionList() {
     <div className="flex min-h-0 flex-1 flex-col">
       <div data-tauri-drag-region="deep" className={cn("flex h-[52px] shrink-0 items-center gap-2 border-b border-border px-3.5", inset)}>
         <div className="min-w-0 flex-1">
-          <div className="truncate text-[14px] font-semibold">{title}</div>
+          <button
+            type="button"
+            data-testid="list-title"
+            title="快速打开（⌘P）"
+            onClick={() => setQuickOpen(true)}
+            className="flex max-w-full items-center gap-1 rounded text-[14px] font-semibold outline-none focus-visible:outline-2 focus-visible:outline-accent"
+          >
+            <span className="truncate">{title}</span>
+            <ChevronDown size={12} strokeWidth={1.8} className="shrink-0 text-secondary" aria-hidden />
+          </button>
           <div className="truncate text-[11px] text-secondary">
             {liveCount} 个进行中 · 按{sortInfo.order}
             {descending ? "倒序" : "正序"}
@@ -95,15 +107,20 @@ export function SessionList() {
           </DropdownMenuContent>
         </DropdownMenu>
       </div>
-      {drill && (
-        <div className="flex shrink-0 items-center gap-2 border-b border-border px-3.5 py-1.5 text-[12px]">
+      {(drill || projectIds.length > 0) && (
+        <div className="flex shrink-0 flex-wrap items-center gap-2 border-b border-border px-3.5 py-1.5 text-[12px]">
           <span className="text-secondary">筛选</span>
-          <span data-testid="drill-chip" className="flex min-w-0 items-center gap-1 rounded-full bg-selection px-2 py-0.5 text-text">
-            <span className="truncate">{drillLabel(drill)}</span>
-            <button type="button" aria-label="清除筛选" onClick={() => setDrill(null)} className="rounded-full p-0.5 hover:bg-black/10">
-              <X size={11} strokeWidth={2} aria-hidden />
-            </button>
-          </span>
+          {projectIds.length > 0 && (
+            <FilterChip testId="project-chip" label="清除 Project 筛选" onClear={() => setProjectIds([])}>
+              <Folder size={11} strokeWidth={1.8} className="shrink-0" aria-hidden />
+              <span className="truncate">{projectIds.map((id) => names.get(id) ?? id).join("、")}</span>
+            </FilterChip>
+          )}
+          {drill && (
+            <FilterChip testId="drill-chip" label="清除筛选" onClear={() => setDrill(null)}>
+              <span className="truncate">{drillLabel(drill)}</span>
+            </FilterChip>
+          )}
         </div>
       )}
       <div
@@ -126,7 +143,9 @@ export function SessionList() {
                 <SessionRow
                   s={s}
                   selected={s.id === sessionId}
-                  projectName={projectIds.length === 1 ? null : (names.get(s.projectId) ?? null)}
+                  projectNames={sessionProjectIds(s)
+                    .filter((id) => !projectIds.includes(id))
+                    .map((id) => names.get(id) ?? id)}
                   byCreated={sort === "created"}
                   onOpen={open}
                 />
@@ -140,16 +159,28 @@ export function SessionList() {
   );
 }
 
+function FilterChip({ testId, label, onClear, children }: { testId: string; label: string; onClear: () => void; children: React.ReactNode }) {
+  return (
+    <span data-testid={testId} className="flex min-w-0 items-center gap-1 rounded-full bg-selection px-2 py-0.5 text-text">
+      {children}
+      <button type="button" aria-label={label} onClick={onClear} className="rounded-full p-0.5 hover:bg-black/10">
+        <X size={11} strokeWidth={2} aria-hidden />
+      </button>
+    </span>
+  );
+}
+
 function SessionRow({
   s,
   selected,
-  projectName,
+  projectNames,
   byCreated,
   onOpen,
 }: {
   s: SessionSummary;
   selected: boolean;
-  projectName: string | null;
+  /** Projects it started in or edited, minus those the list is filtered by. */
+  projectNames: string[];
   byCreated: boolean;
   onOpen: (id: string) => void;
 }) {
@@ -182,7 +213,11 @@ function SessionRow({
         <span className="shrink-0 text-[11px] text-secondary">{formatRelative(byCreated ? s.createdMs : s.lastActiveMs)}</span>
       </div>
       <div className="flex items-center gap-2.5 text-[11px] text-secondary">
-        {projectName && <span className="max-w-[40%] shrink-0 truncate text-text/80">{projectName}</span>}
+        {projectNames.length > 0 && (
+          <span data-testid="row-projects" className="max-w-[45%] shrink-0 truncate text-text/80">
+            {projectNames.join(" · ")}
+          </span>
+        )}
         {s.gitBranch && (
           <span className="flex min-w-0 items-center gap-[3px]">
             <GitBranch size={11} strokeWidth={1.5} className="shrink-0" aria-hidden />

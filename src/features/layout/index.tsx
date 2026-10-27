@@ -1,4 +1,4 @@
-import { List, PanelLeft } from "lucide-react";
+import { ChartColumn, List } from "lucide-react";
 import { useSyncExternalStore } from "react";
 import { useHotkey } from "@/lib/hotkeys";
 import { cn } from "@/lib/cn";
@@ -22,55 +22,60 @@ export function useSessionsHidden(): { hidden: boolean; forced: boolean } {
 }
 
 /**
- * Left padding for `pane` when it is the leftmost visible column (the Project column is collapsed), so its
- * header clears the traffic lights and the toggles; `undefined` otherwise.
+ * Left padding for `pane` when it is the leftmost visible column, so its header clears the traffic lights
+ * and the toolbar; `undefined` otherwise.
  */
 export function useLeadingInset(pane: "sessions" | "main"): string | undefined {
-  const projectsCollapsed = useUi((s) => s.collapsed.projects);
   const { hidden } = useSessionsHidden();
   const fullScreen = useFullScreen();
-  if (!projectsCollapsed || (pane === "sessions" ? hidden : !hidden)) return undefined;
+  if (pane === "sessions" ? hidden : !hidden) return undefined;
   return fullScreen ? "pl-[84px]" : "pl-[140px]";
 }
 
-interface ToggleProps {
-  pane: CollapsiblePane;
-  label: string;
-  keys: string;
-  icon: React.ReactNode;
-  disabled?: boolean;
-}
+const TOOL_CLASS =
+  "flex size-7 items-center justify-center rounded-md text-secondary outline-none hover:bg-text/8 focus-visible:outline-2 focus-visible:outline-accent disabled:opacity-40 disabled:hover:bg-transparent aria-pressed:bg-selection aria-pressed:text-accent";
 
-function Toggle({ pane, label, keys, icon, disabled }: ToggleProps) {
+function Toggle({ pane, label, keys, icon, disabled }: { pane: CollapsiblePane; label: string; keys: string; icon: React.ReactNode; disabled?: boolean }) {
   const collapsed = useUi((s) => s.collapsed[pane]);
   const toggle = useUi((s) => s.toggleCollapsed);
   const action = `${collapsed ? "显示" : "隐藏"} ${label}`;
   return (
-    <button
-      type="button"
-      aria-label={action}
-      title={`${action}（${keys}）`}
-      disabled={disabled}
-      onClick={() => toggle(pane)}
-      className="flex size-7 items-center justify-center rounded-md text-secondary outline-none hover:bg-text/8 focus-visible:outline-2 focus-visible:outline-accent disabled:opacity-40 disabled:hover:bg-transparent"
-    >
+    <button type="button" aria-label={action} title={`${action}（${keys}）`} disabled={disabled} onClick={() => toggle(pane)} className={TOOL_CLASS}>
       {icon}
     </button>
   );
 }
 
-/** Column toggles, pinned right after the traffic lights like a native toolbar. */
-export function PaneToggles() {
+/** Stats replaces the conversation; pressing it again goes back. */
+function StatsToggle() {
+  const active = useUi((s) => s.view === "stats");
+  const setView = useUi((s) => s.setView);
+  return (
+    <button
+      type="button"
+      data-testid="nav-stats"
+      aria-label="统计"
+      title="统计"
+      aria-pressed={active}
+      onClick={() => setView(active ? "sessions" : "stats")}
+      className={TOOL_CLASS}
+    >
+      <ChartColumn size={16} strokeWidth={1.6} aria-hidden />
+    </button>
+  );
+}
+
+/** Session list toggle and stats, pinned right after the traffic lights like a native toolbar. */
+export function Toolbar() {
   const toggle = useUi((s) => s.toggleCollapsed);
   const { forced } = useSessionsHidden();
   const fullScreen = useFullScreen();
-  useHotkey("Ctrl+Meta+S", () => toggle("projects"), { enableInInputs: true });
   useHotkey("Ctrl+Meta+L", () => !forced && toggle("sessions"), { enableInInputs: true });
 
   return (
-    <div data-testid="pane-toggles" className={cn("fixed top-[4px] z-10 flex gap-0.5", fullScreen ? "left-3" : "left-[78px]")}>
-      <Toggle pane="projects" label="Project 栏" keys="⌃⌘S" icon={<PanelLeft size={16} strokeWidth={1.6} aria-hidden />} />
+    <div data-testid="toolbar" className={cn("fixed top-[4px] z-10 flex gap-0.5", fullScreen ? "left-3" : "left-[78px]")}>
       <Toggle pane="sessions" label="Session 列表" keys="⌃⌘L" icon={<List size={16} strokeWidth={1.6} aria-hidden />} disabled={forced} />
+      <StatsToggle />
     </div>
   );
 }

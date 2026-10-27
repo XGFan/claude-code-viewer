@@ -146,7 +146,15 @@ export function SearchOverlay() {
   const open = useUi((s) => s.searchOpen);
   const setOpen = useUi((s) => s.setSearchOpen);
   const jumpTo = useUi((s) => s.jumpTo);
-  useHotkey("Meta+K", () => setOpen(!useUi.getState().searchOpen), { enableInInputs: true });
+  useHotkey(
+    "Meta+K",
+    () => {
+      const ui = useUi.getState();
+      ui.setQuickOpenOpen(false);
+      setOpen(!ui.searchOpen);
+    },
+    { enableInInputs: true },
+  );
 
   const [input, setInput] = useState("");
   // IME composition (e.g. pinyin) puts unconfirmed text in the input; query only confirmed text.

@@ -287,7 +287,7 @@ function searchGroups(req: SearchRequest, roles: SearchRole[]): SearchGroup[] {
   for (const doc of allDocs()) {
     if (doc.hidden || !roles.includes(doc.role)) continue;
     const s = summaryOf(doc.sessionId);
-    if (req.projectId && s.projectId !== req.projectId) continue;
+    if (req.projectId && !relatedProjects(s).includes(req.projectId)) continue;
     if (req.liveOnly && !s.live) continue;
     if (req.timeRange) {
       if (req.timeRange.fromMs != null && s.lastActiveMs < req.timeRange.fromMs) continue;
@@ -374,9 +374,14 @@ function resolveJump(req: JumpRequest): JumpTarget {
   };
 }
 
+/** The Project a session started in and every Project it edited. */
+function relatedProjects(s: SessionSummary): string[] {
+  return [s.projectId, ...s.editedProjectIds];
+}
+
 function listSessions(q: SessionQuery): SessionSummary[] {
   let rows = sessionData.map((d) => ({ d, s: summaryOf(d.summary.id) }));
-  if (q.projectIds.length) rows = rows.filter(({ s }) => q.projectIds.includes(s.projectId));
+  if (q.projectIds.length) rows = rows.filter(({ s }) => relatedProjects(s).some((p) => q.projectIds.includes(p)));
   if (q.liveOnly) rows = rows.filter(({ s }) => s.live);
   if (q.timeRange) {
     const { fromMs, toMs } = q.timeRange;
@@ -417,7 +422,7 @@ function listSessions(q: SessionQuery): SessionSummary[] {
 
 function projects(): ProjectSummary[] {
   return projectBase.map((p) => {
-    const ss = sessionData.map((d) => summaryOf(d.summary.id)).filter((s) => s.projectId === p.id);
+    const ss = sessionData.map((d) => summaryOf(d.summary.id)).filter((s) => relatedProjects(s).includes(p.id));
     return {
       ...p,
       sessionCount: ss.length,

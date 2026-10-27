@@ -4,7 +4,7 @@ import type { WeeklyReset } from "@/lib/cycle";
 
 export type View = "sessions" | "stats" | "diagnostics";
 
-export type CollapsiblePane = "projects" | "sessions";
+export type CollapsiblePane = "sessions";
 
 const COLLAPSED_KEY = "cv.collapsedPanes";
 const WEEKLY_RESET_KEY = "cv.weeklyReset";
@@ -48,7 +48,7 @@ const sessionDefaults = {
 
 interface UiState {
   view: View;
-  /** Empty = all projects (matches `SessionQuery.projectIds`). */
+  /** Session list filter; empty = all projects (matches `SessionQuery.projectIds`). */
   projectIds: string[];
   sessionId: string | null;
   scope: TranscriptScope;
@@ -56,6 +56,7 @@ interface UiState {
   showHidden: boolean;
   panelStack: string[];
   searchOpen: boolean;
+  quickOpenOpen: boolean;
   findOpen: boolean;
   findQuery: string;
   findIndex: number;
@@ -84,6 +85,7 @@ interface UiState {
   pushPanel: (agentId: string) => void;
   popPanel: () => void;
   setSearchOpen: (open: boolean) => void;
+  setQuickOpenOpen: (open: boolean) => void;
   setFindOpen: (open: boolean) => void;
   setFindQuery: (query: string) => void;
   setFindIndex: (index: number) => void;
@@ -105,13 +107,14 @@ export const useUi = create<UiState>()((set) => ({
   sessionId: null,
   ...sessionDefaults,
   searchOpen: false,
+  quickOpenOpen: false,
   pendingJump: null,
   sessionSort: "lastActive",
   sessionDescending: true,
   statsDrill: null,
   statsDrillRange: null,
   settingsOpen: false,
-  collapsed: load(COLLAPSED_KEY, { projects: false, sessions: false }),
+  collapsed: load(COLLAPSED_KEY, { sessions: false }),
   weeklyReset: load(WEEKLY_RESET_KEY, { weekday: 0, minutes: 0 }),
 
   setView: (view) => set({ view }),
@@ -124,6 +127,7 @@ export const useUi = create<UiState>()((set) => ({
   pushPanel: (agentId) => set((s) => ({ panelStack: [...s.panelStack, agentId] })),
   popPanel: () => set((s) => ({ panelStack: s.panelStack.slice(0, -1) })),
   setSearchOpen: (searchOpen) => set({ searchOpen }),
+  setQuickOpenOpen: (quickOpenOpen) => set({ quickOpenOpen }),
   setFindOpen: (findOpen) => set({ findOpen }),
   setFindQuery: (findQuery) => set({ findQuery, findIndex: 0 }),
   setFindIndex: (findIndex) => set({ findIndex }),

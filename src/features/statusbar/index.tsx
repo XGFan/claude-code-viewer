@@ -1,10 +1,12 @@
+import { SettingsButton } from "@/features/settings";
 import { useIndexStatus } from "@/queries";
 
 const nf = new Intl.NumberFormat("en-US");
 
 export function StatusBar() {
   const { data: s } = useIndexStatus();
-  if (!s) return <div className="border-t border-border bg-sidebar" />;
+  const settings = <SettingsButton className="ml-auto size-6 text-secondary" />;
+  if (!s) return <div className="flex items-center border-t border-border bg-sidebar px-1.5">{settings}</div>;
 
   const busy = s.phase === "scanning" || s.phase === "indexingText";
   const pct =
@@ -17,7 +19,7 @@ export function StatusBar() {
     <div
       data-testid="statusbar"
       data-tauri-drag-region="deep"
-      className="flex items-center gap-3 border-t border-border bg-sidebar px-3 text-[11px] text-secondary"
+      className="flex items-center gap-3 border-t border-border bg-sidebar pr-1.5 pl-3 text-[11px] text-secondary"
     >
       {s.phase === "error" ? (
         <span className="text-error">索引失败{s.error ? ` · ${s.error}` : ""}</span>
@@ -40,6 +42,7 @@ export function StatusBar() {
       ) : (
         <span>已索引 {nf.format(s.sessionsTotal)} 个 Session</span>
       )}
+      {settings}
     </div>
   );
 }

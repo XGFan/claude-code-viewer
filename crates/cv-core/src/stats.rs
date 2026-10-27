@@ -25,6 +25,7 @@ use rusqlite::types::Value;
 use rusqlite::{Connection, params_from_iter};
 
 use crate::error::CoreResult;
+use crate::index::reader;
 use crate::index::schema::MSG_ASSISTANT;
 use crate::model::{
     AgentTypeStat, DailyModelTokens, DayCount, ProjectStat, Stats, StatsOverview, StatsRequest,
@@ -50,13 +51,12 @@ pub(crate) fn range_bounds(r: Option<&TimeRange>) -> (i64, i64) {
     (from, to)
 }
 
-/// `AND s.project_id IN (…)` for the request's projects (appends the arguments).
+/// `AND <s started in or edited one of the request's projects>` (appends the arguments).
 fn project_filter(ids: &[String], args: &mut Vec<Value>) -> String {
     if ids.is_empty() {
         return String::new();
     }
-    args.extend(ids.iter().map(|p| Value::Text(p.clone())));
-    format!(" AND s.project_id IN ({})", vec!["?"; ids.len()].join(","))
+    format!(" AND {}", reader::project_match(ids, args))
 }
 
 /// Ids of the sessions in scope, as a subquery (a hashed `IN` list is much cheaper than a

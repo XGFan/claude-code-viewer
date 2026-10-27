@@ -39,7 +39,7 @@ function Panel({ sessionId, stack }: { sessionId: string; stack: string[] }) {
 
   useHotkey("Escape", () => {
     const s = useUi.getState();
-    if (s.searchOpen || s.settingsOpen || s.findOpen) return;
+    if (s.searchOpen || s.quickOpenOpen || s.settingsOpen || s.findOpen) return;
     close();
   });
 

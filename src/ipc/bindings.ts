@@ -406,7 +406,7 @@ export type SessionDetail = {
 };
 
 export type SessionQuery = {
-	/**  Empty = all projects. */
+	/**  Sessions started in or editing any of these Projects; empty = all. */
 	projectIds: string[],
 	sort: SessionSort,
 	descending: boolean,
@@ -441,6 +441,8 @@ export type SessionSummary = {
 	live: LiveState | null,
 	forkOrigin: ForkOrigin | null,
 	primaryModel: string | null,
+	/**  Projects whose files an edit tool (main or Subagent) wrote, `project_id` included if edited. */
+	editedProjectIds: string[],
 };
 
 /**  Emitted after each debounced filesystem batch. */

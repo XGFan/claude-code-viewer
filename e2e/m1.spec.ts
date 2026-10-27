@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import { composeEnd, composeStart } from "./ime";
 
 const RICH_TITLE = "为 /v1/chat 接口增加令牌桶限流中间件";
 
@@ -10,14 +11,83 @@ async function openRich(page: Page) {
   return (await row.getAttribute("data-session-id"))!;
 }
 
-test("选择项目后会话列表被过滤", async ({ page }) => {
+/** Filters the session list by a Project picked in quick open. */
+async function filterProject(page: Page, name: string) {
+  await page.keyboard.press("Meta+P");
+  await page.getByTestId("quick-open").getByRole("combobox").fill(name);
+  await page.getByTestId("quick-open-project").filter({ hasText: name }).click();
+  await expect(page.getByTestId("quick-open")).toBeHidden();
+}
+
+test("在快速打开里选择 Project 后会话列表被过滤，清除筛选恢复全部", async ({ page }) => {
   await page.goto("/");
   await expect(page.getByTestId("session-row").filter({ hasText: RICH_TITLE })).toBeVisible();
-  await page.getByTestId("project-item").filter({ hasText: "orbit-web" }).click();
+  await filterProject(page, "orbit-web");
+  await expect(page.getByTestId("project-chip")).toContainText("orbit-web");
+  await expect(page.getByTestId("list-title")).toHaveText("orbit-web");
   await expect(page.getByTestId("session-row").filter({ hasText: "迁移表单校验到 zod" })).toBeVisible();
   await expect(page.getByTestId("session-row").filter({ hasText: RICH_TITLE })).toHaveCount(0);
-  await page.getByTestId("project-all").click();
+  await page.getByRole("button", { name: "清除 Project 筛选" }).click();
+  await expect(page.getByTestId("project-chip")).toHaveCount(0);
   await expect(page.getByTestId("session-row").filter({ hasText: RICH_TITLE })).toBeVisible();
+});
+
+test("改动过其他 Project 的 Session 也出现在那个 Project 下，并标出其他 Project", async ({ page }) => {
+  await page.goto("/");
+  // Started in orbit-web, also edited lumen-api.
+  const zod = page.getByTestId("session-row").filter({ hasText: "迁移表单校验到 zod" });
+  await expect(zod.getByTestId("row-projects")).toHaveText("orbit-web · lumen-api");
+  await filterProject(page, "lumen-api");
+  await expect(page.getByTestId("session-row").filter({ hasText: RICH_TITLE })).toBeVisible();
+  await expect(zod.getByTestId("row-projects")).toHaveText("orbit-web");
+});
+
+test("快速打开：空查询列出最近的 Session，按标题、Project 和分支查找并打开", async ({ page }) => {
+  await page.goto("/");
+  await page.getByTestId("list-title").click();
+  const dialog = page.getByTestId("quick-open");
+  await expect(dialog.getByTestId("quick-open-session").first()).toContainText(RICH_TITLE);
+  const input = dialog.getByRole("combobox");
+  await input.fill("orbit zod");
+  await expect(dialog.getByTestId("quick-open-session")).toHaveText([/迁移表单校验到 zod/]);
+  await input.fill("redis-leak");
+  await expect(dialog.getByTestId("quick-open-session")).toHaveText([/排查 Redis 连接池泄漏/]);
+  await page.keyboard.press("Enter");
+  await expect(dialog).toBeHidden();
+  await expect(page.getByTestId("header").getByRole("heading", { name: "排查 Redis 连接池泄漏" })).toBeVisible();
+  await page.keyboard.press("Meta+P");
+  await expect(input).toHaveValue("");
+  await input.fill("没有这个词");
+  await expect(dialog.getByTestId("quick-open-empty")).toBeVisible();
+});
+
+test("快速打开：打开不在当前 Project 筛选里的 Session 时清除筛选；⌘K 切换到全局搜索", async ({ page }) => {
+  await page.goto("/");
+  await filterProject(page, "orbit-web");
+  await page.keyboard.press("Meta+P");
+  await page.getByTestId("quick-open").getByRole("combobox").fill("redis-leak");
+  await page.keyboard.press("Enter");
+  await expect(page.getByTestId("project-chip")).toHaveCount(0);
+  await expect(page.getByTestId("session-row").filter({ hasText: "排查 Redis 连接池泄漏" })).toHaveAttribute("aria-selected", "true");
+  await page.keyboard.press("Meta+P");
+  await expect(page.getByTestId("quick-open")).toBeVisible();
+  await page.keyboard.press("Meta+K");
+  await expect(page.getByTestId("quick-open")).toBeHidden();
+  await expect(page.getByTestId("search")).toBeVisible();
+});
+
+test("快速打开：输入法组字期间不按未确认的拼音过滤", async ({ page }) => {
+  await page.goto("/");
+  await page.keyboard.press("Meta+P");
+  const dialog = page.getByTestId("quick-open");
+  const input = dialog.getByRole("combobox");
+  const rows = dialog.getByTestId("quick-open-session");
+  const all = await rows.count();
+  await composeStart(input, ["x", "xian", "xian liu"]);
+  await expect(rows).toHaveCount(all);
+  await composeEnd(input, "限流");
+  await expect(rows).toHaveCount(1);
+  await expect(rows).toContainText(RICH_TITLE);
 });
 
 test("打开会话后渲染标题栏与消息", async ({ page }) => {
@@ -117,60 +187,37 @@ test("本地命令的输出去掉标签和控制码，按命令输出显示", as
   await expect(output).toHaveText("命令输出Session renamed to: 订单列表页审查");
 });
 
-test("Project 列表滚动时「全部 Session」固定不动", async ({ page }) => {
-  await page.setViewportSize({ width: 1400, height: 240 });
-  await page.goto("/");
-  const all = page.getByTestId("project-all");
-  const before = (await all.boundingBox())!.y;
-  const list = page.getByTestId("project-scroll");
-  await list.evaluate((e) => (e.scrollTop = e.scrollHeight));
-  await expect.poll(() => list.evaluate((e) => e.scrollTop)).toBeGreaterThan(0);
-  expect((await all.boundingBox())!.y).toBe(before);
-  await expect(all).toBeInViewport();
-});
-
-test("侧栏「全部 Session」紧贴红绿灯下方", async ({ page }) => {
-  await page.goto("/");
-  const pane = (await page.getByTestId("pane-projects").boundingBox())!;
-  // Traffic lights end at ~22pt; the overlay title bar needs no more than that plus a margin.
-  expect((await page.getByTestId("project-all").boundingBox())!.y - pane.y).toBeLessThanOrEqual(40);
-});
-
 test("触摸板下拉不会把整个页面拉出空白", async ({ page }) => {
   await page.goto("/");
   // Rubber-banding itself is a trackpad gesture Playwright cannot drive; the root opt-out is what prevents it.
   expect(await page.evaluate(() => getComputedStyle(document.documentElement).overscrollBehaviorY)).toBe("none");
 });
 
-test("Project 栏和 Session 列表可收起，刷新后仍保持", async ({ page }) => {
+test("Session 列表可收起，刷新后仍保持", async ({ page }) => {
   await openRich(page);
   const header = page.getByTestId("header");
+  const toolbar = (await page.getByTestId("toolbar").boundingBox())!;
+  // The list header sits under the toolbar, so its title starts past it.
+  expect((await page.getByTestId("list-title").boundingBox())!.x).toBeGreaterThan(toolbar.x + toolbar.width);
   const before = (await header.boundingBox())!;
 
-  await page.getByRole("button", { name: "隐藏 Project 栏" }).click();
-  await expect(page.getByTestId("pane-projects")).toBeHidden();
   await page.keyboard.press("Control+Meta+L");
   await expect(page.getByTestId("pane-sessions")).toBeHidden();
   const after = (await header.boundingBox())!;
-  expect(after.width).toBeGreaterThan(before.width + 500);
-  // The header now sits under the toggles, so its content starts past them.
-  const toggles = (await page.getByTestId("pane-toggles").boundingBox())!;
-  expect((await header.getByRole("heading").boundingBox())!.x).toBeGreaterThan(toggles.x + toggles.width);
+  expect(after.width).toBeGreaterThan(before.width + 300);
+  expect((await header.getByRole("heading").boundingBox())!.x).toBeGreaterThan(toolbar.x + toolbar.width);
 
   await page.reload();
-  await expect(page.getByTestId("pane-projects")).toBeHidden();
   await expect(page.getByTestId("pane-sessions")).toBeHidden();
-  await page.keyboard.press("Control+Meta+S");
   await page.getByRole("button", { name: "显示 Session 列表" }).click();
-  await expect(page.getByTestId("pane-projects")).toBeVisible();
   await expect(page.getByTestId("pane-sessions")).toBeVisible();
 });
 
 test("滚动条只在滚动时显示", async ({ page }) => {
   await page.setViewportSize({ width: 1400, height: 240 });
   await page.goto("/");
-  const list = page.getByTestId("project-scroll");
-  await expect(page.getByTestId("project-item").filter({ hasText: "orbit-web" })).toBeVisible();
+  const list = page.getByRole("listbox", { name: "Session 列表" });
+  await expect(page.getByTestId("session-row").first()).toBeVisible();
   const thumb = () => list.evaluate((e) => e.style.getPropertyValue("--scroll-thumb"));
   expect(await thumb()).toBe("");
   await list.evaluate((e) => (e.scrollTop = 40));
@@ -179,11 +226,11 @@ test("滚动条只在滚动时显示", async ({ page }) => {
   await expect.poll(thumb, { timeout: 3000 }).toBe("");
 });
 
-test("Session 列表收起时，点选 Project 会自动展开列表", async ({ page }) => {
+test("Session 列表收起时，在快速打开里选择 Project 会自动展开列表", async ({ page }) => {
   await page.goto("/");
   await page.getByRole("button", { name: "隐藏 Session 列表" }).click();
   await expect(page.getByTestId("pane-sessions")).toBeHidden();
-  await page.getByTestId("project-item").filter({ hasText: "orbit-web" }).click();
+  await filterProject(page, "orbit-web");
   await expect(page.getByTestId("pane-sessions")).toBeVisible();
   await expect(page.getByTestId("session-row").filter({ hasText: "迁移表单校验到 zod" })).toBeVisible();
 });

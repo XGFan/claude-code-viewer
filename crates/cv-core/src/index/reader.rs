@@ -87,12 +87,15 @@ pub fn main_mtimes(conn: &Connection, since_ms: f64) -> CoreResult<Vec<(String, 
     Ok(rows.collect::<Result<_, _>>()?)
 }
 
-/// Projects with at least one non-empty session, most recently active first.
-/// `live_count` is filled by the engine.
+/// Projects with at least one non-empty session started in or editing them, most recently active
+/// first. `live_count` is filled by the engine.
 pub fn list_projects(conn: &Connection) -> CoreResult<Vec<ProjectSummary>> {
     let mut st = conn.prepare(
-        "SELECT p.id, p.path, p.display_name, p.missing, count(s.id), max(s.last_active_ms)
-         FROM projects p JOIN sessions s ON s.project_id = p.id AND s.is_empty = 0
+        "WITH rel AS (SELECT id AS session_id, project_id FROM sessions
+                UNION SELECT session_id, project_id FROM session_projects)
+         SELECT p.id, p.path, p.display_name, p.missing, count(s.id), max(s.last_active_ms)
+         FROM projects p JOIN rel ON rel.project_id = p.id
+            JOIN sessions s ON s.id = rel.session_id AND s.is_empty = 0
          GROUP BY p.id ORDER BY max(s.last_active_ms) DESC, p.id",
     )?;
     let rows = st.query_map([], |r| {
@@ -109,14 +112,17 @@ pub fn list_projects(conn: &Connection) -> CoreResult<Vec<ProjectSummary>> {
     Ok(rows.collect::<Result<_, _>>()?)
 }
 
-/// session id → project id for the given sessions.
-pub fn session_projects(conn: &Connection, ids: &[String]) -> CoreResult<HashMap<String, String>> {
-    let mut st =
-        conn.prepare_cached("SELECT project_id FROM sessions WHERE id=?1 AND is_empty=0")?;
-    let mut out = HashMap::new();
+/// Projects the given non-empty sessions started in or edited (each Project once per session).
+pub fn session_projects(conn: &Connection, ids: &[String]) -> CoreResult<Vec<String>> {
+    let mut st = conn.prepare_cached(
+        "SELECT project_id FROM sessions WHERE id=?1 AND is_empty=0
+         UNION SELECT sp.project_id FROM session_projects sp JOIN sessions s
+            ON s.id = sp.session_id AND s.is_empty = 0 WHERE sp.session_id=?1",
+    )?;
+    let mut out = Vec::new();
     for id in ids {
-        if let Some(p) = st.query_row([id], |r| r.get::<_, String>(0)).optional()? {
-            out.insert(id.clone(), p);
+        for p in st.query_map([id], |r| r.get::<_, String>(0))? {
+            out.push(p?);
         }
     }
     Ok(out)
@@ -138,7 +144,8 @@ fn summary_select(where_sql: &str) -> String {
          SELECT b.id, b.project_id, b.title, b.title_source, b.created_ms, b.last_active_ms,
             b.message_count, b.tool_call_count, b.subagent_count, b.in_tok, b.out_tok, b.cr_tok,
             b.cc_tok, b.git_branch, b.primary_model, b.origin, o.title,
-            CASE WHEN b.origin = b.fork_origin_id THEN b.fork_point_uuid END, b.cost, b.unpriced
+            CASE WHEN b.origin = b.fork_origin_id THEN b.fork_point_uuid END, b.cost, b.unpriced,
+            (SELECT json_group_array(sp.project_id) FROM session_projects sp WHERE sp.session_id = b.id)
          FROM b LEFT JOIN sessions o ON o.id = b.origin",
         origin = origin_expr("s")
     )
@@ -178,7 +185,21 @@ fn summary_from_row(r: &Row) -> rusqlite::Result<SessionSummary> {
             None => None,
         },
         primary_model: r.get(14)?,
+        edited_project_ids: serde_json::from_str(&r.get::<_, String>(20)?).unwrap_or_default(),
     })
+}
+
+/// `(s.project_id IN (…) OR <s edited one of them>)` for a session alias `s` (appends the
+/// arguments): a session belongs to the Project it started in and to every Project it edited.
+pub fn project_match(ids: &[String], args: &mut Vec<Value>) -> String {
+    let marks = vec!["?"; ids.len()].join(",");
+    for _ in 0..2 {
+        args.extend(ids.iter().map(|p| Value::Text(p.clone())));
+    }
+    format!(
+        "(s.project_id IN ({marks}) OR s.id IN
+            (SELECT sp.session_id FROM session_projects sp WHERE sp.project_id IN ({marks})))"
+    )
 }
 
 /// Non-empty sessions matching `q` (live filtering and `live` states are applied by the engine).
@@ -193,9 +214,7 @@ pub fn list_sessions(conn: &Connection, q: &SessionQuery) -> CoreResult<Vec<Sess
     let mut conds = vec!["s.is_empty = 0".to_owned()];
     let mut args: Vec<Value> = Vec::new();
     if !q.project_ids.is_empty() {
-        let marks = vec!["?"; q.project_ids.len()].join(",");
-        conds.push(format!("s.project_id IN ({marks})"));
-        args.extend(q.project_ids.iter().map(|p| Value::Text(p.clone())));
+        conds.push(project_match(&q.project_ids, &mut args));
     }
     let (from, to) = stats::range_bounds(q.time_range.as_ref());
     // `AND <col> BETWEEN from AND to` for drill rows (only when a range is set, so rows without

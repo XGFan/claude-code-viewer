@@ -8,7 +8,8 @@ pub type SessionId = String;
 pub type NodeId = String;
 /// Subagent id: the agent file stem without the `agent-` prefix.
 pub type AgentId = String;
-/// Project id: the canonical (realpath) cwd the Session started in.
+/// Project id: a git repository root (worktrees folded into the main repository), else a
+/// directory's realpath; see `project::Resolver`.
 pub type ProjectId = String;
 
 #[derive(Serialize, Deserialize, Type, Clone, Debug, Default, PartialEq)]
