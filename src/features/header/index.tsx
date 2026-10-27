@@ -1,4 +1,4 @@
-import { Copy, Ellipsis, FolderOpen, Search } from "lucide-react";
+import { Copy, Ellipsis, FolderOpen } from "lucide-react";
 import { Checkbox } from "@/components/ui/checkbox";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { useLeadingInset } from "@/features/layout";
@@ -20,7 +20,6 @@ export function SessionHeader() {
   const sessionId = useUi((s) => s.sessionId);
   const showHidden = useUi((s) => s.showHidden);
   const setShowHidden = useUi((s) => s.setShowHidden);
-  const setSearchOpen = useUi((s) => s.setSearchOpen);
   const inset = useLeadingInset();
   const { data: d } = useSession(sessionId);
   if (!sessionId || !d) return null;
@@ -37,15 +36,6 @@ export function SessionHeader() {
     <header data-testid="header" data-tauri-drag-region="deep" className={cn("flex shrink-0 flex-col gap-1.5 border-b border-border py-2.5 pr-5 pl-6", inset)}>
       <div className="flex flex-wrap items-center gap-2.5">
         <h1 className="m-0 min-w-60 flex-1 truncate text-[15px] font-[650]">{s.title}</h1>
-        <button
-          type="button"
-          onClick={() => setSearchOpen(true)}
-          className="flex h-7 min-w-50 items-center gap-2 rounded-md border border-border px-2.5 text-[12px] text-secondary"
-        >
-          <Search size={13} strokeWidth={1.6} aria-hidden />
-          <span className="flex-1 text-left">搜索全部 Session</span>
-          <kbd className="rounded border border-border px-1 font-sans text-[11px]">⌘K</kbd>
-        </button>
         <label className="flex items-center gap-1.5 text-[12px] text-text/80">
           <Checkbox checked={showHidden} onCheckedChange={(v) => setShowHidden(v === true)} />
           显示系统消息

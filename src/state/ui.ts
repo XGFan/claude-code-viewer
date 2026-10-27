@@ -2,7 +2,7 @@ import { create } from "zustand";
 import type { BranchChoice, Drill, JumpTarget, SessionSort, TimeRange, TranscriptScope } from "@/ipc/bindings";
 import type { WeeklyReset } from "@/lib/cycle";
 
-export type View = "sessions" | "stats" | "diagnostics";
+export type View = "sessions" | "diagnostics";
 
 export type CollapsiblePane = "sessions";
 
@@ -56,6 +56,8 @@ interface UiState {
   showHidden: boolean;
   panelStack: string[];
   searchOpen: boolean;
+  /** The stats dialog. */
+  statsOpen: boolean;
   findOpen: boolean;
   findQuery: string;
   findIndex: number;
@@ -84,6 +86,7 @@ interface UiState {
   pushPanel: (agentId: string) => void;
   popPanel: () => void;
   setSearchOpen: (open: boolean) => void;
+  setStatsOpen: (open: boolean) => void;
   setFindOpen: (open: boolean) => void;
   setFindQuery: (query: string) => void;
   setFindIndex: (index: number) => void;
@@ -105,6 +108,7 @@ export const useUi = create<UiState>()((set) => ({
   sessionId: null,
   ...sessionDefaults,
   searchOpen: false,
+  statsOpen: false,
   pendingJump: null,
   sessionSort: "lastActive",
   sessionDescending: true,
@@ -124,6 +128,7 @@ export const useUi = create<UiState>()((set) => ({
   pushPanel: (agentId) => set((s) => ({ panelStack: [...s.panelStack, agentId] })),
   popPanel: () => set((s) => ({ panelStack: s.panelStack.slice(0, -1) })),
   setSearchOpen: (searchOpen) => set({ searchOpen }),
+  setStatsOpen: (statsOpen) => set({ statsOpen }),
   setFindOpen: (findOpen) => set({ findOpen }),
   setFindQuery: (findQuery) => set({ findQuery, findIndex: 0 }),
   setFindIndex: (findIndex) => set({ findIndex }),

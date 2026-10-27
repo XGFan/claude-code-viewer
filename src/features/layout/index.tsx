@@ -1,20 +1,47 @@
 import { ChartColumn, List, Search } from "lucide-react";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useSyncExternalStore } from "react";
 import { useHotkey } from "@/lib/hotkeys";
 import { cn } from "@/lib/cn";
 import { useUi, type CollapsiblePane } from "@/state/ui";
 
-function subscribeResize(onChange: () => void) {
-  window.addEventListener("resize", onChange);
-  return () => window.removeEventListener("resize", onChange);
+let fullScreen = false;
+const fullScreenListeners = new Set<() => void>();
+let watchingFullScreen = false;
+
+/** Follows the window's full-screen state: asked of the native window in the app, guessed from the screen size in a browser. */
+function watchFullScreen() {
+  if (watchingFullScreen) return;
+  watchingFullScreen = true;
+  const update = (value: boolean) => {
+    if (value === fullScreen) return;
+    fullScreen = value;
+    fullScreenListeners.forEach((l) => l());
+  };
+  if ("__TAURI_INTERNALS__" in window) {
+    const win = getCurrentWindow();
+    const check = () => void win.isFullscreen().then(update, () => {});
+    check();
+    void win.onResized(check);
+  } else {
+    const check = () => update(window.innerWidth === screen.width && window.innerHeight === screen.height);
+    check();
+    window.addEventListener("resize", check);
+  }
 }
 
-/** A native full-screen window covers the whole screen and has no traffic lights to clear. */
+function subscribeFullScreen(onChange: () => void) {
+  watchFullScreen();
+  fullScreenListeners.add(onChange);
+  return () => void fullScreenListeners.delete(onChange);
+}
+
+/** A native full-screen window has no traffic lights; the toolbar takes their place. */
 function useFullScreen(): boolean {
-  return useSyncExternalStore(subscribeResize, () => window.innerWidth === screen.width && window.innerHeight === screen.height);
+  return useSyncExternalStore(subscribeFullScreen, () => fullScreen);
 }
 
-/** The session list column is hidden by the user, or because the Subagent panel / stats / diagnostics take its place. */
+/** The session list column is hidden by the user, or because the Subagent panel / diagnostics take its place. */
 export function useSessionsHidden(): { hidden: boolean; forced: boolean } {
   const collapsed = useUi((s) => s.collapsed.sessions);
   const forced = useUi((s) => s.view !== "sessions" || (s.sessionId != null && s.panelStack.length > 0));
@@ -46,10 +73,10 @@ function Toggle({ pane, label, keys, icon, disabled }: { pane: CollapsiblePane; 
   );
 }
 
-/** Stats replaces the conversation; pressing it again goes back. Lives in the status bar. */
+/** Opens the stats dialog. Lives in the status bar. */
 export function StatsToggle({ className }: { className?: string }) {
-  const active = useUi((s) => s.view === "stats");
-  const setView = useUi((s) => s.setView);
+  const active = useUi((s) => s.statsOpen);
+  const setStatsOpen = useUi((s) => s.setStatsOpen);
   return (
     <button
       type="button"
@@ -57,7 +84,7 @@ export function StatsToggle({ className }: { className?: string }) {
       aria-label="统计"
       title="统计"
       aria-pressed={active}
-      onClick={() => setView(active ? "sessions" : "stats")}
+      onClick={() => setStatsOpen(!active)}
       className={cn(TOOL_CLASS, className)}
     >
       <ChartColumn size={15} strokeWidth={1.6} aria-hidden />

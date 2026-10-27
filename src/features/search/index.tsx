@@ -187,7 +187,11 @@ function HitRow({ value, hit, disabled, onOpen }: { value: string; hit: SearchHi
 export function SearchOverlay() {
   const open = useUi((s) => s.searchOpen);
   const setOpen = useUi((s) => s.setSearchOpen);
-  const toggle = () => setOpen(!useUi.getState().searchOpen);
+  const toggle = () => {
+    const ui = useUi.getState();
+    ui.setStatsOpen(false);
+    setOpen(!ui.searchOpen);
+  };
   useHotkey("Meta+K", toggle, { enableInInputs: true });
 
   const [input, setInput] = useState("");

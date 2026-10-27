@@ -7,7 +7,7 @@ import { SearchOverlay } from "@/features/search";
 import { SessionHeader } from "@/features/header";
 import { SessionList } from "@/features/sessions";
 import { SettingsDialog } from "@/features/settings";
-import { StatsPanel } from "@/features/stats";
+import { StatsDialog } from "@/features/stats";
 import { StatusBar } from "@/features/statusbar";
 import { SubagentPanel } from "@/features/subagent-panel";
 import { TranscriptView } from "@/features/transcript";
@@ -17,7 +17,7 @@ export default function App() {
   const view = useUi((s) => s.view);
   const sessionId = useUi((s) => s.sessionId);
   // Besides the user's toggle, the Subagent panel takes the session list's width so the conversation keeps
-  // a readable column, and stats and diagnostics span that column too (design board 4).
+  // a readable column, and diagnostics spans that column too.
   const hideList = useSessionsHidden().hidden;
 
   return (
@@ -47,11 +47,6 @@ export default function App() {
               </div>
             </>
           )}
-          {view === "stats" && (
-            <div className="min-h-0 flex-1 bg-list">
-              <StatsPanel />
-            </div>
-          )}
           {view === "diagnostics" && (
             <>
               <div data-tauri-drag-region="deep" className="h-[52px] shrink-0" />
@@ -67,6 +62,7 @@ export default function App() {
       {/* Overlays: portal/fixed based; wrapped so placeholder stubs stay out of the layout. */}
       <div className="fixed right-0 bottom-0 size-0 overflow-hidden">
         <SearchOverlay />
+        <StatsDialog />
         <SettingsDialog />
       </div>
     </div>

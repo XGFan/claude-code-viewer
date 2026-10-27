@@ -15,7 +15,7 @@ function goTo(t: TurnInfo) {
 function useTurnKeys() {
   const step = (d: 1 | -1) => {
     const ui = useUi.getState();
-    if (ui.searchOpen || ui.settingsOpen) return;
+    if (ui.searchOpen || ui.statsOpen || ui.settingsOpen) return;
     const { turns, current } = useReading.getState();
     const t = d === 1 ? turns.find((x) => x.turn > current) : [...turns].reverse().find((x) => x.turn < current);
     if (t) goTo(t);

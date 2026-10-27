@@ -8,12 +8,10 @@ test("两栏布局与统计、设置入口可见", async ({ page }) => {
   await expect(page.getByTestId("settings-button")).toBeVisible();
 });
 
-test("统计按钮再次点击回到 Session", async ({ page }) => {
+test("右侧对话头部不再有搜索按钮", async ({ page }) => {
   await page.goto("/");
-  const stats = page.getByTestId("nav-stats");
-  await stats.click();
-  await expect(stats).toHaveAttribute("aria-pressed", "true");
-  await expect(page.getByTestId("pane-sessions")).toBeHidden();
-  await stats.click();
-  await expect(page.getByTestId("pane-sessions")).toBeVisible();
+  await page.getByTestId("session-row").first().click();
+  await expect(page.getByTestId("header")).toBeVisible();
+  await expect(page.getByTestId("header")).not.toContainText("搜索");
+  await expect(page.getByTestId("search-button")).toBeVisible();
 });

@@ -1,8 +1,9 @@
 import { format } from "date-fns";
 import { zhCN } from "date-fns/locale";
+import { X } from "lucide-react";
+import { Dialog as DialogPrimitive } from "radix-ui";
 import { Fragment, type ReactNode, useMemo, useState } from "react";
 import type { Drill, Stats, TimeRange } from "@/ipc/bindings";
-import { useLeadingInset } from "@/features/layout";
 import { cn } from "@/lib/cn";
 import { cycleEnd, cycleStart } from "@/lib/cycle";
 import { formatCost, formatDuration, formatTokens } from "@/lib/format";
@@ -241,10 +242,29 @@ function CycleBar({ start, end }: { start: Date; end: Date }) {
   );
 }
 
-export function StatsPanel() {
+/** Stats as a large dialog over the window; a click outside or Esc closes it. */
+export function StatsDialog() {
+  const open = useUi((s) => s.statsOpen);
+  const setOpen = useUi((s) => s.setStatsOpen);
+  return (
+    <DialogPrimitive.Root open={open} onOpenChange={setOpen}>
+      <DialogPrimitive.Portal>
+        <DialogPrimitive.Overlay data-testid="stats-overlay" className="fixed inset-0 z-50 bg-[rgba(28,28,30,0.28)]" />
+        <DialogPrimitive.Content
+          aria-describedby={undefined}
+          onOpenAutoFocus={(e) => e.preventDefault()}
+          className="fixed top-1/2 left-1/2 z-50 h-[min(900px,calc(100vh-64px))] w-[min(1280px,calc(100vw-64px))] -translate-x-1/2 -translate-y-1/2 overflow-hidden rounded-[14px] border border-border text-text shadow-[0_24px_64px_rgba(0,0,0,0.22),0_2px_8px_rgba(0,0,0,0.08)] outline-none"
+        >
+          <StatsPanel />
+        </DialogPrimitive.Content>
+      </DialogPrimitive.Portal>
+    </DialogPrimitive.Root>
+  );
+}
+
+function StatsPanel() {
   const dark = useDark();
   const theme = themes[dark ? "dark" : "light"];
-  const inset = useLeadingInset();
   const [rangeKey, setRangeKey] = useState<RangeKey>("30");
   const [metric, setMetric] = useState<Metric>("all");
   const [heat, setHeat] = useState<"day" | "weekHour">("weekHour");
@@ -268,6 +288,7 @@ export function StatsPanel() {
     ui.setStatsDrill(d, timeRange);
     ui.selectSession(null);
     ui.setView("sessions");
+    ui.setStatsOpen(false);
   };
   const openSession = (id: string) => {
     const ui = useUi.getState();
@@ -275,6 +296,7 @@ export function StatsPanel() {
     ui.setStatsDrill(null);
     ui.selectSession(id);
     ui.setView("sessions");
+    ui.setStatsOpen(false);
   };
 
   const dailyOpt = useMemo(() => (stats ? dailyOption(stats.daily, metric, theme) : null), [stats, metric, theme]);
@@ -292,12 +314,20 @@ export function StatsPanel() {
 
   return (
     <div data-testid="stats" className="@container flex h-full min-w-0 flex-col bg-list">
-      {/* Toolbar stays put like the other panes' headers; only the content below scrolls. */}
-      <header data-tauri-drag-region="deep" className={cn("flex shrink-0 flex-col border-b border-border px-6", inset)}>
+      {/* The header stays put; only the content below scrolls. */}
+      <header className="flex shrink-0 flex-col border-b border-border px-6">
         {/* The toolbar row keeps its height; the cycle bar only adds a row below it. */}
-        <div data-tauri-drag-region="deep" className="flex min-h-[52px] flex-wrap items-center gap-3">
-          <h1 className="m-0 flex-1 text-[16px] font-semibold">统计</h1>
+        <div className="flex min-h-[52px] flex-wrap items-center gap-3">
+          <DialogPrimitive.Title asChild>
+            <h1 className="m-0 flex-1 text-[16px] font-semibold">统计</h1>
+          </DialogPrimitive.Title>
           <Segmented label="时间范围" value={rangeKey} options={RANGES.map((r) => ({ key: r.key, label: r.label }))} onChange={setRangeKey} />
+          <DialogPrimitive.Close
+            aria-label="关闭统计"
+            className="-mr-2 flex size-7 items-center justify-center rounded-md text-secondary outline-none hover:bg-text/8 focus-visible:outline-2 focus-visible:outline-accent"
+          >
+            <X size={16} strokeWidth={1.6} aria-hidden />
+          </DialogPrimitive.Close>
         </div>
         {cycle && <CycleBar start={cycle.start} end={cycle.end} />}
       </header>

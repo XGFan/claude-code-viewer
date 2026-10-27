@@ -5,7 +5,7 @@ test("统计面板渲染卡片与图表", async ({ page }) => {
   await page.getByTestId("nav-stats").click();
   const panel = page.getByTestId("stats");
   await expect(panel.getByRole("heading", { name: "统计" })).toBeVisible();
-  await expect(page.getByTestId("pane-sessions")).toBeHidden(); // stats spans the session list column
+  await expect(page.getByTestId("pane-sessions")).toBeVisible(); // a dialog over the window, the list stays
   await expect(page.getByTestId("stat-card")).toHaveCount(5);
   await expect(page.locator('[data-card="sessions"]')).toContainText("10");
   await expect(page.locator('[data-card="cost"]')).toContainText("$412.37");
@@ -87,15 +87,26 @@ test("下钻带上统计的时间范围", async ({ page }) => {
   await expect(review).toHaveCount(0);
 });
 
-test("统计页铺满对话区，上下没有空白", async ({ page }) => {
+test("统计是盖在窗口上的大弹窗：点弹窗外、Esc 或关闭按钮都会关闭", async ({ page }) => {
   await page.setViewportSize({ width: 1400, height: 900 });
   await page.goto("/");
+  const stats = page.getByTestId("stats");
   await page.getByTestId("nav-stats").click();
-  await page.getByTestId("daily-chart").locator("canvas").first().waitFor();
-  const pane = (await page.getByTestId("pane-conversation").boundingBox())!;
-  const stats = (await page.getByTestId("stats").boundingBox())!;
-  expect(stats.y).toBe(pane.y); // no blank strip above the stats header
-  expect(stats.y + stats.height).toBeGreaterThanOrEqual(pane.y + pane.height - 1); // no blank area below
+  await expect(stats).toBeVisible();
+  const box = (await stats.boundingBox())!;
+  expect(box.width).toBeGreaterThan(1200);
+  expect(box.height).toBeGreaterThan(800);
+  await page.mouse.click(10, 450);
+  await expect(stats).toHaveCount(0);
+
+  await page.getByTestId("nav-stats").click();
+  await expect(stats).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(stats).toHaveCount(0);
+
+  await page.getByTestId("nav-stats").click();
+  await page.getByRole("button", { name: "关闭统计" }).click();
+  await expect(stats).toHaveCount(0);
 });
 
 test("窗口变高时图表不随之拉高", async ({ page }) => {
