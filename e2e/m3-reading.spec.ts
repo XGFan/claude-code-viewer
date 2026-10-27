@@ -81,7 +81,10 @@ test("复制：resume 命令、Session ID、消息；在 Finder 中显示", asyn
   await page.getByRole("menuitem", { name: "在 Finder 中显示" }).click();
   await expect.poll(async () => (await calls(page)).at(-1)).toEqual({ method: "revealSessionFile", args: [sid, null] });
 
-  const prompt = page.locator('[data-testid="transcript"] [data-kind="userPrompt"]').first();
+  const prompt = page
+    .locator('[data-testid="transcript"] [data-kind="userPrompt"]')
+    .filter({ has: page.getByTestId("copy-button") })
+    .first();
   await prompt.hover();
   await prompt.getByTestId("copy-button").click();
   const copied = (await calls(page)).at(-1)!;

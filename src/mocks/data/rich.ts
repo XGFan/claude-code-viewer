@@ -76,6 +76,11 @@ const askQuestions = [
   },
 ];
 
+const clarifyQuestions = [
+  { question: "按什么维度限流？", header: "维度", options: [{ label: "API key" }, { label: "IP" }] },
+  { question: "默认额度是多少？", header: "额度", options: [{ label: "每分钟 120 次" }, { label: "每分钟 60 次" }] },
+];
+
 const askAnswers = { "限流超限时应返回什么？": "429 + Retry-After", "限流计数存在哪里？": "先放内存，留好换 Redis 的接口" };
 
 export const richMain: Node[] = [
@@ -169,6 +174,24 @@ export const richMain: Node[] = [
   ]),
   asstNode("n10", ts(), [
     text("超限时的响应有两种常见做法，需要你确认。"),
+    // The user picked "Chat about this" after answering the first question.
+    call("tu_ask_clarify", "AskUserQuestion", { questions: clarifyQuestions }, {
+      text: [
+        "The user doesn't want to proceed with this tool use. The tool use was rejected (eg. if it was a file edit, the new_string was NOT written to the file). To tell you how to proceed, the user said:",
+        "The user wants to clarify these questions.",
+        "    This means they may have additional information, context or questions for you.",
+        "",
+        "    Questions asked:",
+        '- "按什么维度限流？"',
+        "  Answer: API key",
+        '- "默认额度是多少？"',
+        "  (No answer provided)",
+        "",
+        "Note: The user's next message may contain a correction or preference.",
+      ].join("\n"),
+      isError: true,
+      timestampMs: t + 60_000,
+    }),
     call("tu_ask", "AskUserQuestion", { questions: askQuestions }, {
       text: 'User has answered your questions: "限流超限时应返回什么？"="429 + Retry-After", "限流计数存在哪里？"="先放内存，留好换 Redis 的接口".',
       timestampMs: t + 90_000,

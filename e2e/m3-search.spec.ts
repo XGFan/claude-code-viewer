@@ -43,7 +43,7 @@ test("按「你」搜索能搜到 AskUserQuestion 的回答，打开后定位到
   await expect(hit).toContainText("你");
   await hit.click();
   await expect(page.getByTestId("search")).toHaveCount(0);
-  await expect(page.getByTestId("ask")).toBeInViewport();
+  await expect(page.getByTestId("ask").filter({ hasText: "留好换 Redis" })).toBeInViewport();
 });
 
 test("Subagent 内的命中带 Subagent 标签，点击后跳转", async ({ page }) => {

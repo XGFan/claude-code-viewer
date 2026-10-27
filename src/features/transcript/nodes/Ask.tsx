@@ -20,18 +20,41 @@ interface AskResult {
   annotations?: Record<string, { notes?: string }>;
 }
 
+const CLARIFY = "The user wants to clarify these questions.";
+
+/**
+ * Answers given before the user picked "Chat about this": the call is rejected and the result
+ * text lists each question as `- "question"`, followed by `  Answer: …` / `  User notes: …`
+ * lines or `  (No answer provided)`.
+ */
+export function clarifyAnswers(text: string): AskResult {
+  const answers: Record<string, string> = {};
+  const annotations: Record<string, { notes?: string }> = {};
+  const asked = text.split("Questions asked:")[1]?.split("\n\nNote:")[0] ?? "";
+  for (const m of asked.matchAll(/^- "([\s\S]*?)"\n((?: {2}.*(?:\n|$))*)/gm)) {
+    const answer = /^ {2}Answer: (.*)$/m.exec(m[2])?.[1];
+    const notes = /^ {2}User notes: (.*)$/m.exec(m[2])?.[1];
+    if (answer) answers[m[1]] = answer;
+    if (notes) annotations[m[1]] = { notes };
+  }
+  return { answers, annotations };
+}
+
 /** AskUserQuestion: one card with every question and option; the user's picks are marked in place. */
 export function AskRow({ node, call, role }: { node: Node; call: ToolCallBlock; role: RoleInfo | null }) {
   const result = call.result;
-  const failed = result?.isError === true;
-  const extra = parseJson<AskResult>(result?.extraJson);
+  // "Chat about this" is recorded as a rejection, but it is the user's choice, not a failure.
+  const clarify = result?.isError === true && result.text.includes(CLARIFY);
+  const failed = result?.isError === true && !clarify;
+  const extra = parseJson<AskResult>(result?.extraJson) ?? (clarify ? clarifyAnswers(result.text) : null);
   const questions = extra?.questions ?? parseJson<{ questions?: Question[] }>(call.inputJson)?.questions ?? [];
   const answers = extra?.answers ?? {};
   const notes = extra?.annotations ?? {};
   const answered = questions.some((q) => answers[q.question] || notes[q.question]?.notes);
   // Answers keyed by something other than the question text: show the raw result instead.
-  const fallback = result && !failed && !answered ? result.text.trim() : "";
-  const status = !result ? "等待回答" : failed ? "未回答" : result.timestampMs != null ? `你 · ${clock(result.timestampMs)} 已回答` : "已回答";
+  const fallback = result && !failed && !clarify && !answered ? result.text.trim() : "";
+  const at = result?.timestampMs != null ? `你 · ${clock(result.timestampMs)} ` : "";
+  const status = !result ? "等待回答" : failed ? "未回答" : clarify ? `${at}选择先聊聊` : `${at}已回答`;
   return (
     <AssistantSegment role={role}>
       <Anchor nodeId={node.id} toolUseId={call.toolUseId} className="w-full">

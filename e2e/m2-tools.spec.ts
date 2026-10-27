@@ -114,7 +114,7 @@ test("图片缩略图渲染并可放大", async ({ page }) => {
 
 test("AskUserQuestion 单独显示问题并标出你的回答，任务清单显示状态", async ({ page }) => {
   await openRich(page);
-  const ask = page.getByTestId("ask");
+  const ask = page.getByTestId("ask").filter({ hasText: "限流超限时应返回什么？" });
   await reveal(page, ask);
   // Shown expanded, outside any tool group.
   await expect(page.locator('[data-testid="tool-group"] [data-testid="ask"]')).toHaveCount(0);
@@ -129,4 +129,14 @@ test("AskUserQuestion 单独显示问题并标出你的回答，任务清单显�
   await reveal(page, todo);
   await todo.getByRole("button").first().click();
   await expect(todo.getByTestId("checklist").locator("li")).toHaveCount(3);
+});
+
+test("AskUserQuestion 选择先聊聊时不显示为失败，标出已答的问题", async ({ page }) => {
+  await openRich(page);
+  const ask = page.getByTestId("ask").filter({ hasText: "按什么维度限流？" });
+  await reveal(page, ask);
+  await expect(ask).not.toHaveAttribute("data-failed");
+  await expect(ask.getByTestId("ask-status")).toHaveText(/^你 · \d\d:\d\d 选择先聊聊$/);
+  await expect(ask.locator("[data-chosen]")).toHaveText("API key");
+  await expect(ask).not.toContainText("The user doesn't want to proceed");
 });
