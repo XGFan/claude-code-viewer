@@ -34,6 +34,7 @@ import type {
 import type { Api, Unlisten } from "./api";
 import { DAY, NOW, sumTok, tok, TINY_PNG_BASE64 } from "@/mocks/data/builders";
 import { appInfo, diagnostics, indexStatus as indexStatusSeed, stats as statsSeed } from "@/mocks/data/misc";
+import { parseQuery } from "@/features/search/match";
 import { projectBase } from "@/mocks/data/projects";
 import {
   PERSISTED_FULL,
@@ -253,18 +254,6 @@ function toolCalls(sessionId: string): Map<string, ToolCall> {
 }
 
 // ---- search -------------------------------------------------------------------------------------
-
-function parseQuery(q: string) {
-  const include: string[] = [];
-  const exclude: string[] = [];
-  for (const tok of q.match(/-?"[^"]+"|\S+/g) ?? []) {
-    const neg = tok.startsWith("-");
-    const term = (neg ? tok.slice(1) : tok).replace(/^"|"$/g, "").toLowerCase();
-    if (!term) continue;
-    (neg ? exclude : include).push(term);
-  }
-  return { include, exclude };
-}
 
 function snippet(text: string, terms: string[]): SnippetPart[] {
   const lower = text.toLowerCase();
@@ -572,7 +561,7 @@ export function createMockApi(): Api {
     getImage: (req) => later(() => ({ mediaType: req.image.mediaType, dataBase64: TINY_PNG_BASE64 })),
     search: (req) =>
       later((): SearchResponse => {
-        calls.push({ method: "search", args: [req.query] });
+        calls.push({ method: "search", args: [req.query, req.projectId] });
         const groups = searchGroups({ ...req, maxSessions: req.maxSessions || 50 }, req.roles.length ? req.roles : DEFAULT_ROLES);
         return {
           groups,

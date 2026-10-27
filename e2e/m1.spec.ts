@@ -1,5 +1,4 @@
 import { expect, test, type Page } from "@playwright/test";
-import { composeEnd, composeStart, escWhileComposing } from "./ime";
 
 const RICH_TITLE = "为 /v1/chat 接口增加令牌桶限流中间件";
 
@@ -11,15 +10,15 @@ async function openRich(page: Page) {
   return (await row.getAttribute("data-session-id"))!;
 }
 
-/** Filters the session list by a Project picked in quick open. */
+/** Filters the session list by a Project picked in the search dialog. */
 async function filterProject(page: Page, name: string) {
   await page.keyboard.press("Meta+P");
-  await page.getByTestId("quick-open").getByRole("combobox").fill(name);
-  await page.getByTestId("quick-open-project").filter({ hasText: name }).click();
-  await expect(page.getByTestId("quick-open")).toBeHidden();
+  await page.getByTestId("search").getByRole("combobox").fill(name);
+  await page.getByTestId("search-project").filter({ hasText: name }).click();
+  await expect(page.getByTestId("search")).toBeHidden();
 }
 
-test("在快速打开里选择 Project 后会话列表被过滤，清除筛选恢复全部", async ({ page }) => {
+test("在搜索里选择 Project 后会话列表被过滤，清除筛选恢复全部", async ({ page }) => {
   await page.goto("/");
   await expect(page.getByTestId("session-row").filter({ hasText: RICH_TITLE })).toBeVisible();
   await filterProject(page, "orbit-web");
@@ -40,67 +39,6 @@ test("改动过其他 Project 的 Session 也出现在那个 Project 下，并�
   await filterProject(page, "lumen-api");
   await expect(page.getByTestId("session-row").filter({ hasText: RICH_TITLE })).toBeVisible();
   await expect(zod.getByTestId("row-projects")).toHaveText("orbit-web");
-});
-
-test("快速打开：空查询列出最近的 Session，按标题、Project 和分支查找并打开", async ({ page }) => {
-  await page.goto("/");
-  await page.getByTestId("list-title").click();
-  const dialog = page.getByTestId("quick-open");
-  await expect(dialog.getByTestId("quick-open-session").first()).toContainText(RICH_TITLE);
-  const input = dialog.getByRole("combobox");
-  await input.fill("orbit zod");
-  await expect(dialog.getByTestId("quick-open-session")).toHaveText([/迁移表单校验到 zod/]);
-  await input.fill("redis-leak");
-  await expect(dialog.getByTestId("quick-open-session")).toHaveText([/排查 Redis 连接池泄漏/]);
-  await page.keyboard.press("Enter");
-  await expect(dialog).toBeHidden();
-  await expect(page.getByTestId("header").getByRole("heading", { name: "排查 Redis 连接池泄漏" })).toBeVisible();
-  await page.keyboard.press("Meta+P");
-  await expect(input).toHaveValue("");
-  await input.fill("没有这个词");
-  await expect(dialog.getByTestId("quick-open-empty")).toBeVisible();
-});
-
-test("快速打开：打开不在当前 Project 筛选里的 Session 时清除筛选；⌘K 切换到全局搜索", async ({ page }) => {
-  await page.goto("/");
-  await filterProject(page, "orbit-web");
-  await page.keyboard.press("Meta+P");
-  await page.getByTestId("quick-open").getByRole("combobox").fill("redis-leak");
-  await page.keyboard.press("Enter");
-  await expect(page.getByTestId("project-chip")).toHaveCount(0);
-  await expect(page.getByTestId("session-row").filter({ hasText: "排查 Redis 连接池泄漏" })).toHaveAttribute("aria-selected", "true");
-  await page.keyboard.press("Meta+P");
-  await expect(page.getByTestId("quick-open")).toBeVisible();
-  await page.keyboard.press("Meta+K");
-  await expect(page.getByTestId("quick-open")).toBeHidden();
-  await expect(page.getByTestId("search")).toBeVisible();
-});
-
-test("快速打开：输入法组字期间不按未确认的拼音过滤", async ({ page }) => {
-  await page.goto("/");
-  await page.keyboard.press("Meta+P");
-  const dialog = page.getByTestId("quick-open");
-  const input = dialog.getByRole("combobox");
-  const rows = dialog.getByTestId("quick-open-session");
-  const all = await rows.count();
-  await composeStart(input, ["x", "xian", "xian liu"]);
-  await expect(rows).toHaveCount(all);
-  await composeEnd(input, "限流");
-  await expect(rows).toHaveCount(1);
-  await expect(rows).toContainText(RICH_TITLE);
-});
-
-test("快速打开：组字时按 Esc 只取消候选词，不关闭弹窗", async ({ page }) => {
-  await page.goto("/");
-  await page.keyboard.press("Meta+P");
-  const dialog = page.getByTestId("quick-open");
-  const input = dialog.getByRole("combobox");
-  await composeStart(input, ["x", "xian"]);
-  await escWhileComposing(input);
-  await expect(dialog).toBeVisible();
-  await composeEnd(input, "");
-  await page.keyboard.press("Escape");
-  await expect(dialog).toBeHidden();
 });
 
 test("打开会话后渲染标题栏与消息", async ({ page }) => {
@@ -239,7 +177,7 @@ test("滚动条只在滚动时显示", async ({ page }) => {
   await expect.poll(thumb, { timeout: 3000 }).toBe("");
 });
 
-test("Session 列表收起时，在快速打开里选择 Project 会自动展开列表", async ({ page }) => {
+test("Session 列表收起时，在搜索里选择 Project 会自动展开列表", async ({ page }) => {
   await page.goto("/");
   await page.getByRole("button", { name: "隐藏 Session 列表" }).click();
   await expect(page.getByTestId("pane-sessions")).toBeHidden();

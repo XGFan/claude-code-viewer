@@ -56,7 +56,6 @@ interface UiState {
   showHidden: boolean;
   panelStack: string[];
   searchOpen: boolean;
-  quickOpenOpen: boolean;
   findOpen: boolean;
   findQuery: string;
   findIndex: number;
@@ -85,7 +84,6 @@ interface UiState {
   pushPanel: (agentId: string) => void;
   popPanel: () => void;
   setSearchOpen: (open: boolean) => void;
-  setQuickOpenOpen: (open: boolean) => void;
   setFindOpen: (open: boolean) => void;
   setFindQuery: (query: string) => void;
   setFindIndex: (index: number) => void;
@@ -107,7 +105,6 @@ export const useUi = create<UiState>()((set) => ({
   sessionId: null,
   ...sessionDefaults,
   searchOpen: false,
-  quickOpenOpen: false,
   pendingJump: null,
   sessionSort: "lastActive",
   sessionDescending: true,
@@ -127,7 +124,6 @@ export const useUi = create<UiState>()((set) => ({
   pushPanel: (agentId) => set((s) => ({ panelStack: [...s.panelStack, agentId] })),
   popPanel: () => set((s) => ({ panelStack: s.panelStack.slice(0, -1) })),
   setSearchOpen: (searchOpen) => set({ searchOpen }),
-  setQuickOpenOpen: (quickOpenOpen) => set({ quickOpenOpen }),
   setFindOpen: (findOpen) => set({ findOpen }),
   setFindQuery: (findQuery) => set({ findQuery, findIndex: 0 }),
   setFindIndex: (findIndex) => set({ findIndex }),

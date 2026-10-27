@@ -3,7 +3,6 @@ import { DiagnosticsPage } from "@/features/diagnostics";
 import { FindBar } from "@/features/find";
 import { Toolbar, useSessionsHidden } from "@/features/layout";
 import { Outline } from "@/features/outline";
-import { QuickOpen } from "@/features/quick-open";
 import { SearchOverlay } from "@/features/search";
 import { SessionHeader } from "@/features/header";
 import { SessionList } from "@/features/sessions";
@@ -68,7 +67,6 @@ export default function App() {
       {/* Overlays: portal/fixed based; wrapped so placeholder stubs stay out of the layout. */}
       <div className="fixed right-0 bottom-0 size-0 overflow-hidden">
         <SearchOverlay />
-        <QuickOpen />
         <SettingsDialog />
       </div>
     </div>

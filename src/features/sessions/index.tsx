@@ -4,7 +4,7 @@ import { useMemo, useRef, type KeyboardEvent } from "react";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import type { Drill, ProjectSummary, SessionSort, SessionSummary } from "@/ipc/bindings";
 import { useLeadingInset } from "@/features/layout";
-import { sessionProjectIds } from "@/features/quick-open/match";
+import { sessionProjectIds } from "@/features/search/match";
 import { cn } from "@/lib/cn";
 import { formatCost, formatRelative, formatTokens } from "@/lib/format";
 import { useProjects, useSessionList } from "@/queries";
@@ -34,7 +34,7 @@ export function SessionList() {
   const drill = useUi((s) => s.statsDrill);
   const setDrill = useUi((s) => s.setStatsDrill);
   const setProjectIds = useUi((s) => s.setProjectIds);
-  const setQuickOpen = useUi((s) => s.setQuickOpenOpen);
+  const setSearchOpen = useUi((s) => s.setSearchOpen);
 
   const list = data ?? [];
   const names = useMemo(() => new Map((projects ?? []).map((p: ProjectSummary) => [p.id, p.displayName])), [projects]);
@@ -72,8 +72,8 @@ export function SessionList() {
           <button
             type="button"
             data-testid="list-title"
-            title="快速打开（⌘P）"
-            onClick={() => setQuickOpen(true)}
+            title="搜索（⌘K / ⌘P）"
+            onClick={() => setSearchOpen(true)}
             className="flex max-w-full items-center gap-1 rounded text-[14px] font-semibold outline-none focus-visible:outline-2 focus-visible:outline-accent"
           >
             <span className="truncate">{title}</span>
