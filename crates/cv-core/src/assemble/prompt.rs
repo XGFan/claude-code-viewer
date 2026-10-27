@@ -74,6 +74,25 @@ pub fn classify(e: &RawEntry, text: &str) -> PromptOrigin {
     PromptOrigin::Human
 }
 
+/// Tags wrapping a command's output in a [`PromptOrigin::CommandOutput`] prompt.
+const OUTPUT_TAGS: [&str; 4] = [
+    "local-command-stdout",
+    "local-command-stderr",
+    "bash-stdout",
+    "bash-stderr",
+];
+
+/// A command output with nothing inside its tags (`<local-command-stdout></local-command-stdout>`).
+pub fn is_empty_output(text: &str) -> bool {
+    let mut rest = text.to_owned();
+    for t in OUTPUT_TAGS {
+        rest = rest
+            .replace(&format!("<{t}>"), "")
+            .replace(&format!("</{t}>"), "");
+    }
+    rest.trim().is_empty()
+}
+
 /// A human or command prompt typed by the user: counts as a message, can head a Branch and
 /// supplies the title. Excludes other origins (`peer`, …), meta, outputs and notifications.
 pub fn is_human(e: &RawEntry, origin: &PromptOrigin) -> bool {
@@ -155,7 +174,9 @@ mod tests {
         );
         assert_eq!(title_text(&o, cmd), "/release v1.2.0");
         let bare = "<command-message>codex-cli-runtime</command-message>\n<command-name>codex-cli-runtime</command-name>";
-        assert!(matches!(classify(&e, bare), PromptOrigin::Command { name, .. } if name == "/codex-cli-runtime"));
+        assert!(
+            matches!(classify(&e, bare), PromptOrigin::Command { name, .. } if name == "/codex-cli-runtime")
+        );
         assert!(is_human(&e, &o));
 
         let n = "<task-notification>\n<task-id>a1</task-id>\n<tool-use-id>toolu_1</tool-use-id>\n<status>completed</status>\n<summary>done</summary>\n</task-notification>";
@@ -177,6 +198,12 @@ mod tests {
             classify(&e, "<local-command-stdout>ok</local-command-stdout>"),
             PromptOrigin::CommandOutput
         );
+        assert!(is_empty_output(
+            "<local-command-stdout> </local-command-stdout>"
+        ));
+        assert!(!is_empty_output(
+            "<local-command-stdout>ok</local-command-stdout>"
+        ));
         let meta = entry(r#"{"type":"user","isMeta":true}"#);
         assert_eq!(classify(&meta, "hi"), PromptOrigin::Meta);
         let peer = entry(r#"{"type":"user","origin":{"kind":"peer"}}"#);

@@ -100,12 +100,21 @@ test("斜杠命令只显示一个斜杠，命令名高亮", async ({ page }) => 
   await page.goto("/");
   await page.getByTestId("session-row").filter({ hasText: "/review 订单列表页" }).click();
   const transcript = page.getByTestId("transcript");
-  const name = transcript.getByTestId("command-name");
+  const name = transcript.getByTestId("command-name").first();
   await expect(name).toHaveText("/review");
   await expect(name.locator("..")).toHaveText("/review 订单列表页");
   // Highlighted like the terminal: the command token is coloured differently from its arguments.
   const [cmdColor, argColor] = await name.evaluate((e) => [getComputedStyle(e).color, getComputedStyle(e.parentElement!).color]);
   expect(cmdColor).not.toBe(argColor);
+});
+
+test("本地命令的输出去掉标签和控制码，按命令输出显示", async ({ page }) => {
+  await page.goto("/");
+  await page.getByTestId("session-row").filter({ hasText: "/review 订单列表页" }).click();
+  const transcript = page.getByTestId("transcript");
+  await expect(transcript.getByTestId("command-name").last()).toHaveText("/rename");
+  const output = transcript.getByTestId("command-output");
+  await expect(output).toHaveText("命令输出Session renamed to: 订单列表页审查");
 });
 
 test("Project 列表滚动时「全部 Session」固定不动", async ({ page }) => {

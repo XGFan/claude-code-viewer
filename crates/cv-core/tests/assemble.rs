@@ -300,15 +300,7 @@ fn hidden_entries_follow_the_default_rules() {
             _ => None,
         })
         .collect();
-    assert_eq!(
-        subtypes,
-        [
-            "local_command",
-            "informational",
-            "api_error",
-            "future_notice"
-        ]
-    );
+    assert_eq!(subtypes, ["informational", "api_error", "future_notice"]);
     let api_error = t
         .nodes
         .iter()
@@ -341,11 +333,13 @@ fn hidden_entries_follow_the_default_rules() {
             _ => None,
         })
         .collect();
-    assert_eq!(origins.len(), 4);
+    assert_eq!(origins.len(), 5);
     assert!(origins.contains(&&PromptOrigin::Command {
         name: "/release".into(),
         args: "v1.2.0".into()
     }));
+    // The `local_command` system entry is the command's output.
+    assert!(origins.contains(&&PromptOrigin::CommandOutput));
 
     let all = main_t(&s, true);
     assert_eq!(all.hidden_count, t.hidden_count);
@@ -1116,4 +1110,45 @@ fn input_queued_while_claude_was_busy_shows_as_user_messages() {
     // The two typed prompts count as the user's messages; the notification and the peer don't.
     let a = summarize(&s.skeleton);
     assert_eq!(a.message_count, 5, "3 human prompts + 2 assistant messages");
+}
+
+#[test]
+fn local_commands_recorded_as_system_entries_show_as_commands() {
+    let f = from_lines(&[
+        r#"{"type":"user","uuid":"u1","parentUuid":null,"message":{"role":"user","content":"看下模板"}}"#,
+        r#"{"type":"assistant","uuid":"a1","parentUuid":"u1","message":{"id":"m1","content":[{"type":"text","text":"好的"}]}}"#,
+        r#"{"type":"system","subtype":"local_command","uuid":"c1","parentUuid":"a1","level":"info","content":"<command-name>/rename</command-name>\n            <command-message>rename</command-message>\n            <command-args>wmc template issue</command-args>"}"#,
+        r#"{"type":"system","subtype":"local_command","uuid":"o1","parentUuid":"c1","level":"info","content":"<local-command-stdout>Session renamed to: wmc template issue</local-command-stdout>"}"#,
+        r#"{"type":"system","subtype":"local_command","uuid":"c2","parentUuid":"o1","level":"info","content":"<command-name>/mcp</command-name>\n            <command-message>mcp</command-message>\n            <command-args></command-args>"}"#,
+        r#"{"type":"system","subtype":"local_command","uuid":"o2","parentUuid":"c2","level":"info","content":"<local-command-stdout></local-command-stdout>"}"#,
+    ]);
+    let s = assemble(
+        "sid",
+        Path::new("/nonexistent"),
+        vec![f],
+        SessionSidecar::default(),
+    );
+    let t = main_t(&s, false);
+    let origin = |id: &str| match &t.nodes.iter().find(|n| n.id == id).map(|n| &n.body) {
+        Some(NodeBody::UserPrompt { origin, .. }) => Some(origin.clone()),
+        Some(b) => panic!("{id}: unexpected {b:?}"),
+        None => None,
+    };
+    assert_eq!(
+        origin("c1"),
+        Some(PromptOrigin::Command {
+            name: "/rename".into(),
+            args: "wmc template issue".into()
+        })
+    );
+    assert_eq!(origin("o1"), Some(PromptOrigin::CommandOutput));
+    // An empty output is hidden.
+    assert_eq!(origin("o2"), None);
+    assert_eq!(t.hidden_count, 1);
+
+    let a = summarize(&s.skeleton);
+    assert_eq!(
+        a.message_count, 4,
+        "1 prompt + 2 commands + 1 assistant message"
+    );
 }

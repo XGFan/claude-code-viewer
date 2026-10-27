@@ -144,7 +144,9 @@ fn node_of(
     if entry_type == "user" && !is_tool_result && !is_compact_summary {
         let text = prompt::user_text(e);
         let origin = prompt::classify(e, &text);
-        is_meta |= origin == PromptOrigin::Meta;
+        // An empty command output has nothing to show; treat it like meta.
+        is_meta |= origin == PromptOrigin::Meta
+            || (origin == PromptOrigin::CommandOutput && prompt::is_empty_output(&text));
         is_human = prompt::is_human(e, &origin);
     }
     let mut tool_uses = Vec::new();

@@ -1,6 +1,7 @@
 import { ArrowUp, ChevronDown, ChevronRight, Clock } from "lucide-react";
 import { CopyButton } from "@/components/ui/copy-button";
 import type { BranchPoint, Node } from "@/ipc/bindings";
+import { stripAnsi } from "@/lib/ansi";
 import { Markdown } from "@/lib/markdown";
 import { useUi } from "@/state/ui";
 import { BranchSwitcher } from "../BranchSwitcher";
@@ -17,9 +18,9 @@ export function UserPromptView({ node, body, branch }: { node: Node; body: UserB
   if (o.kind === "teammate") return <TeammateCard node={node} body={body} />;
   if (o.kind !== "human" && o.kind !== "command") {
     return (
-      <div className="flex items-baseline gap-2 text-[12px] text-secondary">
+      <div data-testid={o.kind === "commandOutput" ? "command-output" : undefined} className="flex items-baseline gap-2 text-[12px] text-secondary">
         <span className="shrink-0">{o.kind === "meta" ? "元消息" : o.kind === "taskNotification" ? "任务通知" : "命令输出"}</span>
-        <span className="min-w-0 truncate">{body.text}</span>
+        <span className="min-w-0 truncate">{o.kind === "commandOutput" ? outputText(body.text) : body.text}</span>
       </div>
     );
   }
@@ -47,6 +48,9 @@ export function UserPromptView({ node, body, branch }: { node: Node; body: UserB
     </Anchor>
   );
 }
+
+/** A command output without its `<local-command-stdout>`-style tags and ANSI codes. */
+const outputText = (text: string) => stripAnsi(text.replace(/<\/?(?:local-command|bash)-std(?:out|err)>/g, "")).trim();
 
 const STATUS_TEXT: Record<string, string> = { completed: "已完成", failed: "失败", killed: "已终止", error: "失败" };
 

@@ -12,8 +12,8 @@ use serde_json::value::RawValue;
 use super::{LoadedFile, SessionSkeleton, content, prompt, tree};
 use crate::known;
 use crate::model::{
-    AgentId, AssistantBlock, ImageRef, Node, NodeBody, NodeId, PersistedRef, PromptOrigin,
-    TokenTotals, ToolCall, ToolResult,
+    AgentId, AssistantBlock, ImageRef, Node, NodeBody, NodeId, PersistedRef, TokenTotals, ToolCall,
+    ToolResult,
 };
 use crate::raw::{RawBlock, RawEntry, decode_str};
 
@@ -109,7 +109,7 @@ pub fn render(ctx: &RenderCtx<'_>, display: &[usize]) -> Rendered {
             "user" => {
                 let text = prompt::user_text(e);
                 let origin = prompt::classify(e, &text);
-                hidden = origin == PromptOrigin::Meta;
+                hidden = n.is_meta;
                 NodeBody::UserPrompt {
                     images: prompt_images(e, &n.uuid),
                     text,

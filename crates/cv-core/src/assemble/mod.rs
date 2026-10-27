@@ -97,7 +97,7 @@ pub struct SkeletonNode {
     pub message_id: Option<String>,
     /// Global file order (file rank in merge order, then byte offset).
     pub order: (u32, u64),
-    /// `isMeta`, or a user entry classified as meta (`<system-reminder>` …).
+    /// `isMeta`, a user entry classified as meta (`<system-reminder>` …) or an empty command output.
     pub is_meta: bool,
     pub is_compact_summary: bool,
     pub is_tool_result: bool,

@@ -148,6 +148,35 @@ impl RawEntry {
         self.attachment = None;
     }
 
+    /// Turns a `system` `local_command` entry (newer Claude Code records local slash commands
+    /// such as `/rename` and their output this way) into the `user` entry older versions wrote
+    /// for the same thing, so the command and its output render, count and index alike.
+    pub fn normalize_local_command(&mut self) {
+        if self.entry_type() != "system" || self.subtype.as_deref() != Some("local_command") {
+            return;
+        }
+        let Some(content) = self.content.take() else {
+            return;
+        };
+        let raw = content.get();
+        let known = ["<command-name>", "<command-message>", "<local-command-std"]
+            .iter()
+            .any(|p| raw.starts_with(&format!("\"{p}")));
+        let message = known
+            .then(|| {
+                serde_json::from_str::<RawMessage>(&format!(r#"{{"role":"user","content":{raw}}}"#))
+                    .ok()
+            })
+            .flatten();
+        let Some(message) = message else {
+            self.content = Some(content);
+            return;
+        };
+        self.entry_type = Some("user".to_owned());
+        self.subtype = None;
+        self.message = Some(message);
+    }
+
     /// Unix milliseconds parsed from `timestamp`.
     pub fn timestamp_ms(&self) -> Option<f64> {
         parse_timestamp_ms(self.timestamp.as_deref()?)

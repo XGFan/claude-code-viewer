@@ -36,7 +36,7 @@ not `isCompactSummary`, whose `origin.kind` is absent or `human`, and whose cont
 - Split fragments: 9 of the 16 assistant messages are split over 2-5 entries that repeat the same `usage` (count tokens once per `message.id`): e.g. a real thinking + text + tool_use(Bash) message in 3 fragments, a hand-written thinking + text pair, and the 5-fragment parallel group below.
 - Tools (18 `tool_use`): Bash (ok, real), Read, Edit, Write, Grep (parallel group: one text fragment, several tool_use fragments, results hang off their own fragment), an `mcp__plugin_…state_list_active` call, Skill, AskUserQuestion, TaskCreate x2, TaskUpdate, SendMessage, WebFetch, **TodoWrite** (hand-written, `toolUseResult.newTodos`), and a **failed Bash** (hand-written, `is_error:true`, ANSI escapes in the output, `toolUseResult` is a string `Error: Exit code 101…`). Exactly one `is_error` tool_result.
 - Hidden-by-default material: attachments (hook_success, skill_listing), a `isMeta` user entry (`<system-reminder>…`), system `turn_duration` and `stop_hook_summary`.
-- Visible system entries: `local_command`, `informational`, `api_error`, and the unknown `future_notice`.
+- Visible system entries: `informational`, `api_error`, and the unknown `future_notice`; the `local_command` entry is shown as a command output prompt.
 - A command prompt `<command-message>release</command-message><command-name>/release</command-name><command-args>v1.2.0</command-args>` (title form "/release v1.2.0").
 - One **duplicate uuid** (the `skill_listing` attachment is written twice with different `parentUuid`); first occurrence wins, `dup uuids = 1`.
 - Other meta lines: `permission-mode`, `agent-name`, `mode`, `file-history-snapshot`, `queue-operation`.

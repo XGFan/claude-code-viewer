@@ -20,7 +20,10 @@ export const IDS = {
 
 interface Turn {
   u: string;
-  a: string;
+  /** Output of a local slash command, shown right after it. */
+  out?: string;
+  /** Omitted for a local command, which gets no reply. */
+  a?: string;
   /** A Bash call attached to the assistant reply. */
   bash?: { command: string; out: string; isError?: boolean };
 }
@@ -108,7 +111,10 @@ const defs: Def[] = [
   {
     id: IDS.orbitReview, projectId: ORBIT, title: "/review 订单列表页", titleSource: "firstPrompt", createdAgo: 8 * DAY, lastActiveAgo: 8 * DAY - 30 * MIN,
     gitBranch: "feat/orders", live: null, model: "claude-opus-4-7", tokens: tok(8_900, 5_400, 420_000, 12_000),
-    turns: [{ u: "/review 订单列表页", a: "发现 2 个问题：分页参数未做上限校验；列表在筛选变化时未取消上一个请求。" }],
+    turns: [
+      { u: "/review 订单列表页", a: "发现 2 个问题：分页参数未做上限校验；列表在筛选变化时未取消上一个请求。" },
+      { u: "/rename 订单列表页审查", out: "<local-command-stdout>Session renamed to: \u001b[1m订单列表页审查\u001b[22m</local-command-stdout>" },
+    ],
     tools: ["Read", "Grep"], agentTypes: ["code-reviewer"], subagentCount: 1,
   },
   {
@@ -152,6 +158,8 @@ function turnNodes(prefix: string, startMs: number, turns: Turn[], inheritedCoun
     const cmd = turn.u.match(/^(\/\S+)\s*(.*)$/s);
     const origin = cmd ? ({ kind: "command", name: cmd[1]!, args: cmd[2]! } as const) : undefined;
     nodes.push(userNode(`${prefix}-u${i}`, t0, turn.u, { inherited: uInherited, origin }));
+    if (turn.out) nodes.push(userNode(`${prefix}-o${i}`, t0, turn.out, { origin: { kind: "commandOutput" } }));
+    if (turn.a === undefined) return;
     const blocks = [{ kind: "text", text: turn.a } as const];
     const all = turn.bash
       ? [...blocks, call(`${prefix}-tu${i}`, "Bash", { command: turn.bash.command }, { text: turn.bash.out, isError: turn.bash.isError ?? false })]
@@ -188,7 +196,7 @@ export const sessionData: MockSessionData[] = defs.map((d) => {
   }
 
   const richTokens = sumTok(tok(61_000, 42_400, 1_450_000, 88_000), ...richSubagents.map((s) => s.tokens));
-  const messageCount = d.id === IDS.rich ? 48 : nodes.length;
+  const messageCount = d.id === IDS.rich ? 48 : nodes.filter((n) => !(n.body.kind === "userPrompt" && n.body.origin.kind === "commandOutput")).length;
   const summary: SessionSummary = {
     id: d.id,
     projectId: d.projectId,

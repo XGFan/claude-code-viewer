@@ -69,6 +69,7 @@ pub fn parse_bytes(buf: &[u8], base_offset: u64) -> ParsedChunk {
         match parsed {
             Ok(mut entry) => {
                 entry.normalize_queued_command();
+                entry.normalize_local_command();
                 chunk.records.push(EntryRecord {
                     line_no,
                     offset,
